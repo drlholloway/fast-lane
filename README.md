@@ -227,6 +227,10 @@ go test -race ./...
 | `internal/doctor` | Prerequisite checks shown on the Settings tab |
 | `internal/config`, `internal/state`, `internal/prompt` | Settings, persistence and prompt templates |
 
+## Contributing and security
+
+Bug reports, recipes and fixes are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Please report security problems privately, as [SECURITY.md](SECURITY.md) describes, rather than in an issue. Changes are listed in the [changelog](CHANGELOG.md).
+
 ## License
 
 Fast Lane is licensed under the [PolyForm Shield License 1.0.0](LICENSE.md). You're free to use, modify and share it, including at work. What you can't do is use it to offer a product that competes with Fast Lane, such as selling it or a derivative of it as a product or service.

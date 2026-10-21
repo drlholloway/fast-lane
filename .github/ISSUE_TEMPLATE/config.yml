@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Help and how-tos
+    url: https://github.com/drlholloway/fast-lane/wiki
+    about: Installation, first steps, triggers, auto rules, the inbox, recipes, configuration, troubleshooting.
+  - name: Report a security problem
+    url: https://github.com/drlholloway/fast-lane/security/advisories/new
+    about: Please use private reporting rather than a public issue.

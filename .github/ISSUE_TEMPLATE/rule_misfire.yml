@@ -1,0 +1,47 @@
+name: Rule didn't run as expected
+description: An auto rule or trigger ran when it shouldn't have, didn't run when it should have, or ran with the wrong prompt or permissions.
+labels: [bug, rules]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The wiki's [Troubleshooting](https://github.com/drlholloway/fast-lane/wiki/Troubleshooting#nothing-runs-on-its-own) page has a checklist for "nothing runs on its own" that answers most of these. If you've been through it, please fill this in.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `fast-lane -version` prints.
+    validations:
+      required: true
+  - type: dropdown
+    id: direction
+    attributes:
+      label: What went wrong
+      options:
+        - It didn't run, but should have
+        - It ran, but shouldn't have
+        - It ran with the wrong prompt, model, effort or actions
+        - It ran more than once
+    validations:
+      required: true
+  - type: input
+    id: trigger
+    attributes:
+      label: Item and trigger
+      description: The kind of item and what happened to it.
+      placeholder: "My own PR, CI failed after a push"
+    validations:
+      required: true
+  - type: textarea
+    id: rules
+    attributes:
+      label: Your rules
+      description: The `auto_rules` for that kind (global, and the repo's own if it has any), and whether auto-run was on for the repo or the inbox.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: What Fast Lane showed
+      description: The status line after the poll (for example "1 didn't match auto rules"), and the item's tag on the Events tab.

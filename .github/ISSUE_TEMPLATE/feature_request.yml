@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest a trigger, a rule filter or action, a setting, or a workflow improvement.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The goal, not the button. "Have Claude rebase stale PRs every Monday" is more useful than "add a schedule field".
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help
+      description: How you imagine it working. Example rules, mock screens and examples from other tools welcome.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Triggers and what Fast Lane watches
+        - Auto rules, filters and actions
+        - Prompts
+        - Inbox
+        - Sessions and dialogs
+        - Worktrees and checkouts
+        - Settings and setup
+        - Other
+  - type: textarea
+    id: safety
+    attributes:
+      label: What should Claude be allowed to do on its own?
+      description: If the idea lets Claude act without asking, say what it would do and how you'd want it limited.

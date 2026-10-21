@@ -1,0 +1,62 @@
+name: Bug report
+description: Fast Lane misbehaves, crashes, or shows something wrong.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `fast-lane -version` prints.
+      placeholder: "fast-lane v0.1.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: tools
+    attributes:
+      label: GitHub CLI, Claude Code and terminal
+      description: What `gh --version` and `claude --version` print, and which terminal you use.
+      placeholder: "gh 2.102.0, Claude Code 2.1.306, Ghostty"
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - Events tab
+        - Sessions tab or a Claude session
+        - Repos tab
+        - Rules tab
+        - Settings tab
+        - Inbox (review requests, mentions, assignments)
+        - Worktrees or clones
+        - Starting up
+        - Other
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead. A screenshot of the screen helps.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Watch a repo and turn on auto-run
+        2. ...
+  - type: textarea
+    id: logs
+    attributes:
+      label: Config and logs
+      description: The relevant part of `~/.config/fast-lane/config.json`, and for a session problem the end of `~/.local/state/fast-lane/logs/session-<n>.jsonl`. Remove anything private first.
+      render: shell
