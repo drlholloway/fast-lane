@@ -1,6 +1,8 @@
 # Fast Lane
 ## A TUI for monitoring and automating GitHub events
 
+📖 **[Read the wiki](https://github.com/drlholloway/fast-lane/wiki)** for guides to every feature, ready-made [recipes](https://github.com/drlholloway/fast-lane/wiki/Recipes) and [troubleshooting](https://github.com/drlholloway/fast-lane/wiki/Troubleshooting).
+
 ## Introduction
 
 GitHub is an insanely useful tool, but some events just sit there waiting for work that could easily be automated. Fast Lane is a TUI that runs in your console. It watches the repositories you pick from the ones you have access to, and it handles the routine work you'd otherwise do by hand. It starts Claude Code sessions to deal with PRs, issues, and security alerts, so this maintenance doesn't interrupt your day.
