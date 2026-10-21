@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+
+	tea "github.com/charmbracelet/bubbletea"
 	"os"
 	"path/filepath"
 	"strings"
@@ -205,5 +207,25 @@ func TestSettingsAbout(t *testing.T) {
 	keys(m, "enter")
 	if m.dialog != nil || len(opened) != 2 {
 		t.Fatal("enter on Version does nothing")
+	}
+}
+
+func TestDialogsSurviveResize(t *testing.T) {
+	m, _ := newTestModel(t)
+	resize := func() { m.Update(tea.WindowSizeMsg{Width: 100, Height: 28}) }
+	keys(m, "4", "n")
+	resize() // rule form, prompt editor closed
+	d := m.dialog.(*ruleDialog)
+	d.cursor = len(d.fields()) - 1
+	keys(m, "enter")
+	resize() // prompt editor open
+	m.dialog = nil
+	openSetting(t, m, "Poll interval")
+	resize() // single-line editor
+	m.dialog = nil
+	openSetting(t, m, "Allowed tools")
+	resize() // multi-line editor
+	if !strings.Contains(m.View(), "Allowed tools") {
+		t.Fatal("dialog lost after resize")
 	}
 }

@@ -473,7 +473,9 @@ func (d *editDialog) help() string {
 
 func (d *editDialog) resize(w, h int) {
 	d.width = dialogWidth(w)
-	d.ta.SetWidth(d.width - 6)
+	if d.multiline { // single-line editors have no text area
+		d.ta.SetWidth(d.width - 6)
+	}
 }
 
 func (d *editDialog) passthrough(msg tea.Msg) tea.Cmd {

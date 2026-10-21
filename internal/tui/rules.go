@@ -750,7 +750,9 @@ func (d *ruleDialog) help() string {
 
 func (d *ruleDialog) resize(w, h int) {
 	d.width, d.height = dialogWidth(w), h
-	d.ta.SetWidth(d.width - 6)
+	if d.editing { // the prompt editor only exists while it is open
+		d.ta.SetWidth(d.width - 6)
+	}
 }
 
 func (d *ruleDialog) passthrough(msg tea.Msg) tea.Cmd {
