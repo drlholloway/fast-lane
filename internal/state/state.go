@@ -32,6 +32,12 @@ type State struct {
 	Fired map[string][]string `json:"fired"`
 	// LastChange is the most recent change that fired on each item.
 	LastChange map[string]github.Change `json:"last_change"`
+	// Inbox holds review requests, mentions and assignments from repos the
+	// user does not watch, by event key, so the feed keeps them across runs.
+	Inbox map[string]github.Event `json:"inbox"`
+	// InboxSince is when the inbox was last read; zero until the first poll,
+	// which only records the time so old notifications never fire.
+	InboxSince time.Time `json:"inbox_since"`
 	// AutoRuns counts sessions started or resumed without asking per item.
 	AutoRuns map[string]int    `json:"auto_runs"`
 	Sessions []*claude.Session `json:"sessions"`
@@ -80,6 +86,9 @@ func (s *State) init() {
 	}
 	if s.AutoRuns == nil {
 		s.AutoRuns = map[string]int{}
+	}
+	if s.Inbox == nil {
+		s.Inbox = map[string]github.Event{}
 	}
 }
 
@@ -130,6 +139,15 @@ func (s *State) Fire(key string, c github.Change) bool {
 	s.Fired[key] = f
 	s.LastChange[key] = c
 	return true
+}
+
+// PruneInbox forgets inbox items with no activity since cutoff.
+func (s *State) PruneInbox(cutoff time.Time) {
+	for k, ev := range s.Inbox {
+		if ev.UpdatedAt.Before(cutoff) {
+			delete(s.Inbox, k)
+		}
+	}
 }
 
 // IsDismissed reports whether key was dismissed after its last update.

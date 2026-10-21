@@ -24,7 +24,7 @@ const pullRequestsQuery = `query($owner: String!, $name: String!, $after: String
         headRefName headRefOid mergeable reviewDecision
         reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
         commits(last: 1) { nodes { commit { author { user { login } } statusCheckRollup { state } } } }
-        comments(last: 1) { nodes { id body author { login __typename } } }
+        comments(last: 1) { nodes { id databaseId body author { login __typename } } }
         reviews(last: 1) { nodes { id state body author { login __typename } comments(last: 1) { nodes { body path } } } }
       }
     }
@@ -39,7 +39,7 @@ const issuesQuery = `query($owner: String!, $name: String!, $after: String) {
         number title url body createdAt updatedAt
         author { login __typename }
         labels(first: 20) { nodes { name } }
-        comments(last: 1) { nodes { id body author { login __typename } } }
+        comments(last: 1) { nodes { id databaseId body author { login __typename } } }
       }
     }
   }
@@ -104,9 +104,10 @@ type itemJSON struct {
 	} `json:"commits"`
 	Comments struct {
 		Nodes []struct {
-			ID     string     `json:"id"`
-			Body   string     `json:"body"`
-			Author *actorJSON `json:"author"`
+			ID         string     `json:"id"`
+			DatabaseID int64      `json:"databaseId"`
+			Body       string     `json:"body"`
+			Author     *actorJSON `json:"author"`
 		} `json:"nodes"`
 	} `json:"comments"`
 	Reviews struct {
@@ -203,7 +204,7 @@ func (it itemJSON) event(repo string, k config.EventKind) Event {
 	}
 	if n := it.Comments.Nodes; len(n) > 0 {
 		c := n[0]
-		e.LastComment = Activity{ID: c.ID, Author: c.Author.login(), Bot: c.Author.bot(), Body: truncate(c.Body, 2000)}
+		e.LastComment = Activity{ID: c.ID, DatabaseID: c.DatabaseID, Author: c.Author.login(), Bot: c.Author.bot(), Body: truncate(c.Body, 2000)}
 	}
 	if n := it.Reviews.Nodes; len(n) > 0 {
 		rv := n[0]

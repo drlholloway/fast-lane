@@ -78,6 +78,9 @@ type Client interface {
 	ListStarred(ctx context.Context) ([]Repo, error)
 	ListMyOpenPRs(ctx context.Context, login string) ([]Event, error)
 	FetchEvents(ctx context.Context, repo string, kinds []config.EventKind) ([]Event, error)
+	// Inbox returns review requests, mentions and assignments for me from
+	// notifications updated since since.
+	Inbox(ctx context.Context, me string, since time.Time) ([]InboxItem, error)
 }
 
 // REST implements Client with go-gh, which reuses the gh CLI's auth.
@@ -269,7 +272,12 @@ type issueJSON struct {
 	PullRequest   *struct{} `json:"pull_request"`
 	Head          *struct {
 		Ref string `json:"ref"`
+		SHA string `json:"sha"`
 	} `json:"head"`
+	State              string     `json:"state"`
+	Assignees          []userJSON `json:"assignees"`
+	RequestedReviewers []userJSON `json:"requested_reviewers"`
+	RequestedTeams     []struct{} `json:"requested_teams"`
 }
 
 func (it issueJSON) event(repo string, k config.EventKind) Event {
@@ -288,7 +296,10 @@ func (it issueJSON) event(repo string, k config.EventKind) Event {
 		UpdatedAt: it.UpdatedAt,
 	}
 	if it.Head != nil {
-		e.Branch = it.Head.Ref
+		e.Branch, e.HeadSHA = it.Head.Ref, it.Head.SHA
+	}
+	for _, u := range it.RequestedReviewers {
+		e.ReviewRequests = append(e.ReviewRequests, u.Login)
 	}
 	for _, l := range it.Labels {
 		e.Labels = append(e.Labels, l.Name)

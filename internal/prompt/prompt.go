@@ -134,6 +134,31 @@ URL: {{.URL}}
 
 Respond to it. If it asks for a change, check out the PR, make it, and push to the PR branch. If it asks a question, answer it with a reply.`,
 
+	"pull_request:mentioned": `@{{.Actor}} mentioned you on pull request #{{.Number}} "{{.Title}}" in {{.Repo}}.
+URL: {{.URL}}
+
+{{.Detail}}
+
+Read the PR and its discussion (gh pr view {{.Number}} --comments, gh pr diff {{.Number}}) and the code involved, then reply to what they asked.
+If they asked for a change and the PR is yours, make it on the PR branch and push. Otherwise answer in a reply.`,
+
+	"issue:mentioned": `@{{.Actor}} mentioned you on issue #{{.Number}} "{{.Title}}" in {{.Repo}}.
+URL: {{.URL}}
+
+{{.Detail}}
+
+Read the thread with gh issue view {{.Number}} --comments and the code involved, then reply to what they asked.`,
+
+	"issue:assigned": `You were assigned issue #{{.Number}} "{{.Title}}" in {{.Repo}}, opened by @{{.Author}}.
+URL: {{.URL}}
+
+Read the issue and its comments with gh issue view {{.Number}} --comments, then find the relevant code.
+Fix it on a new branch with a test, push the branch and open a pull request that closes the issue.
+If what is wanted is unclear, reply on the issue with your questions instead.
+
+Issue body:
+{{.Body}}`,
+
 	"issue:commented": `@{{.Actor}} commented on issue #{{.Number}} "{{.Title}}" in {{.Repo}}.
 URL: {{.URL}}
 

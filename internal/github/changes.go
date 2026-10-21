@@ -2,6 +2,7 @@ package github
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/drlholloway/fast-lane/internal/config"
@@ -9,9 +10,11 @@ import (
 
 // Activity is a comment or review on an item.
 type Activity struct {
-	ID     string `json:"id,omitempty"`
-	Author string `json:"author,omitempty"`
-	Bot    bool   `json:"bot,omitempty"`
+	ID string `json:"id,omitempty"`
+	// DatabaseID is the numeric ID REST and notifications use.
+	DatabaseID int64  `json:"database_id,omitempty"`
+	Author     string `json:"author,omitempty"`
+	Bot        bool   `json:"bot,omitempty"`
 	// State is the review state (APPROVED, CHANGES_REQUESTED, COMMENTED).
 	State string `json:"state,omitempty"`
 	Body  string `json:"body,omitempty"`
@@ -91,7 +94,7 @@ func Detect(prev Snapshot, e Event, me string) []Change {
 		}
 	}
 	if c := e.LastComment; c.ID != "" && c.ID != prev.LastCommentID && other(c.Author) && !c.Bot {
-		add(Change{Trigger: config.TriggerCommented, ID: "comment@" + c.ID, Actor: c.Author, Detail: c.Body})
+		add(Change{Trigger: config.TriggerCommented, ID: CommentChangeID(c), Actor: c.Author, Detail: c.Body})
 	}
 	if requested(e.ReviewRequests, me) && !requested(prev.ReviewRequests, me) {
 		add(Change{Trigger: config.TriggerReviewRequested, ID: "review_requested@" + e.HeadSHA})
@@ -117,6 +120,16 @@ func Detect(prev Snapshot, e Event, me string) []Change {
 		}
 	}
 	return out
+}
+
+// CommentChangeID identifies a change caused by issue comment c. Snapshot
+// detection and the inbox share it, so one comment fires only once on an
+// item even when it is both a comment and a mention.
+func CommentChangeID(c Activity) string {
+	if c.DatabaseID != 0 {
+		return "comment@" + strconv.FormatInt(c.DatabaseID, 10)
+	}
+	return "comment@" + c.ID
 }
 
 func failed(checks string) bool { return checks == "FAILURE" || checks == "ERROR" }

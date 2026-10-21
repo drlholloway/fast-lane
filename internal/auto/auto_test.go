@@ -91,3 +91,30 @@ func TestRuleForFirstMatchWins(t *testing.T) {
 		t.Fatal("a PR no rule accepts should not match")
 	}
 }
+
+func TestDecidePersonalTriggers(t *testing.T) {
+	cfg := config.Default()
+	cfg.AutoRules = map[config.RuleKey]config.Rules{"pull_request": {{}}}
+	off := config.Repo{FullName: "o/r"} // auto_run off, or not watched at all
+	pr := github.Event{Kind: config.KindPullRequest}
+
+	if _, ok := Decide(cfg, off, pr, config.TriggerOpened); ok {
+		t.Fatal("repo triggers need the repo's auto_run")
+	}
+	if rule, ok := Decide(cfg, off, pr, config.TriggerReviewRequested); !ok || len(rule.Allow) != 0 {
+		t.Fatal("review requests should auto-run with nothing pre-approved by default")
+	}
+
+	cfg.AutoRules["pull_request:review_requested"] = config.Rules{{SkipBots: true, Allow: []config.Action{config.ActionReview}}}
+	if rule, ok := Decide(cfg, off, pr, config.TriggerReviewRequested); !ok || len(rule.Allow) != 1 {
+		t.Fatal("a rule should opt in to submitting reviews")
+	}
+	if _, ok := Decide(cfg, off, github.Event{Kind: config.KindPullRequest, Bot: true}, config.TriggerReviewRequested); ok {
+		t.Fatal("a configured rule that rejects the item should stop it")
+	}
+
+	cfg.Inbox.AutoRun = false
+	if _, ok := Decide(cfg, off, pr, config.TriggerReviewRequested); ok {
+		t.Fatal("inbox auto_run off should stop personal triggers")
+	}
+}

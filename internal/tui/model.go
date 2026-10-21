@@ -48,6 +48,11 @@ type (
 		events []github.Event
 		err    error
 	}
+	inboxMsg struct {
+		items []github.InboxItem
+		at    time.Time
+		err   error
+	}
 	pollTickMsg    struct{}
 	refreshTickMsg time.Time
 	sessionMsg     claude.Update
@@ -189,8 +194,35 @@ func (m *Model) pollAll() tea.Cmd {
 	}
 	m.lastPoll = time.Now()
 	m.nextPoll = m.lastPoll.Add(m.cfg.PollInterval.Duration)
+	cmds = append(cmds, m.pollInbox())
 	cmds = append(cmds, tea.Tick(m.cfg.PollInterval.Duration, func(time.Time) tea.Msg { return pollTickMsg{} }))
 	return tea.Batch(cmds...)
+}
+
+// inboxOverlap re-reads a little of the previous window so notifications
+// updated during a poll are not missed; Fire drops the repeats.
+const inboxOverlap = time.Minute
+
+// pollInbox reads review requests, mentions and assignments. The very first
+// poll only records the time, so notifications from before Fast Lane started
+// watching the inbox never fire.
+func (m *Model) pollInbox() tea.Cmd {
+	if !m.cfg.Inbox.Enabled || m.login == "" {
+		return nil
+	}
+	if m.st.InboxSince.IsZero() {
+		m.st.InboxSince = time.Now()
+		m.dirty = true
+		return nil
+	}
+	gh, me, since := m.gh, m.login, m.st.InboxSince.Add(-inboxOverlap)
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		at := time.Now()
+		items, err := gh.Inbox(ctx, me, since)
+		return inboxMsg{items: items, at: at, err: err}
+	}
 }
 
 func (m *Model) setStatus(err bool, format string, args ...any) {
@@ -223,12 +255,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.login = msg.login
 		m.repos = mergeRepos(msg.repos, msg.starred, msg.myPRs, msg.login)
+		cmds = append(cmds, m.pollInbox())
 
 	case pollTickMsg:
 		cmds = append(cmds, m.pollAll())
 
 	case polledMsg:
 		cmds = append(cmds, m.onPolled(msg))
+
+	case inboxMsg:
+		cmds = append(cmds, m.onInbox(msg))
 
 	case sessionMsg:
 		m.refreshSessions()
@@ -321,13 +357,11 @@ func (m *Model) onPolled(msg polledMsg) tea.Cmd {
 		changed++
 		m.fresh[ev.Key] = true
 		delete(m.st.Dismissed, ev.Key)
-		if !rc.AutoRun {
-			continue
-		}
 		c, rule, ok := m.autoChange(*rc, ev, changes)
 		switch {
-		case !ok:
+		case !ok && rc.AutoRun:
 			filtered++
+		case !ok:
 		case m.st.AutoRuns[ev.Key] >= m.cfg.MaxAutoRuns:
 			capped++
 		default:
@@ -391,14 +425,83 @@ func (m *Model) changesFor(ev github.Event, now time.Time) []github.Change {
 	return out
 }
 
-// autoChange picks the first change, in trigger order, that has a rule.
+// autoChange picks the first change, in trigger order, that auto-runs.
 func (m *Model) autoChange(rc config.Repo, ev github.Event, changes []github.Change) (github.Change, config.Rule, bool) {
 	for _, c := range changes {
-		if rule, ok := auto.RuleFor(m.cfg, rc, ev, c.Trigger); ok {
+		if rule, ok := auto.Decide(m.cfg, rc, ev, c.Trigger); ok {
 			return c, rule, true
 		}
 	}
 	return github.Change{}, config.Rule{}, false
+}
+
+// onInbox records review requests, mentions and assignments and runs the
+// ones that auto-run. Items in watched repos already appear in the feed from
+// their repo's poll.
+func (m *Model) onInbox(msg inboxMsg) tea.Cmd {
+	if msg.err != nil {
+		m.pollErrs["inbox"] = msg.err.Error()
+		return nil
+	}
+	delete(m.pollErrs, "inbox")
+	m.st.InboxSince = msg.at
+	changed, started, capped := 0, 0, 0
+	for _, it := range msg.items {
+		ev, c := it.Event, it.Change
+		rc := m.cfg.Repo(ev.Repo)
+		if rc == nil {
+			m.st.Inbox[ev.Key] = ev
+		}
+		if !m.st.Fire(ev.Key, c) {
+			continue
+		}
+		changed++
+		m.fresh[ev.Key] = true
+		delete(m.st.Dismissed, ev.Key)
+		rule, ok := auto.Decide(m.cfg, m.repoFor(ev), ev, c.Trigger)
+		switch {
+		case !ok:
+		case m.st.AutoRuns[ev.Key] >= m.cfg.MaxAutoRuns:
+			capped++
+		default:
+			if err := m.runChange(ev, c, rule); err != nil {
+				m.setStatus(true, "Auto-run %s (%s) failed: %v", ev.Key, c.Trigger, err)
+				continue
+			}
+			m.st.AutoRuns[ev.Key]++
+			started++
+		}
+	}
+	m.st.PruneInbox(time.Now().Add(-inboxMaxAge))
+	m.dirty = true
+	m.rebuildFeed()
+	if changed == 0 {
+		return nil
+	}
+	text := fmt.Sprintf("Inbox: %d review request(s), mention(s) or assignment(s)", changed)
+	if started > 0 {
+		text += fmt.Sprintf(", ran Claude on %d", started)
+	}
+	if capped > 0 {
+		text += fmt.Sprintf(", %d reached max_auto_runs", capped)
+	}
+	m.setStatus(false, "%s", text)
+	if started == changed {
+		return nil
+	}
+	return bell
+}
+
+// inboxMaxAge is how long an inbox item stays in the feed without activity.
+const inboxMaxAge = 14 * 24 * time.Hour
+
+// repoFor returns ev's watch settings, or bare settings for a repo the user
+// does not watch, which then follows the global auto rules.
+func (m *Model) repoFor(ev github.Event) config.Repo {
+	if rc := m.cfg.Repo(ev.Repo); rc != nil {
+		return *rc
+	}
+	return config.Repo{FullName: ev.Repo}
 }
 
 // pendingRun is a change waiting for its session to finish a turn.
@@ -488,11 +591,7 @@ func (m *Model) manualChange(ev github.Event) (github.Change, config.Rule) {
 	if !ok {
 		c = github.Opened(ev)
 	}
-	rc := m.cfg.Repo(ev.Repo)
-	if rc == nil {
-		return c, config.Rule{}
-	}
-	rule, _ := auto.RuleFor(m.cfg, *rc, ev, c.Trigger)
+	rule, _ := auto.RuleFor(m.cfg, m.repoFor(ev), ev, c.Trigger)
 	return c, rule
 }
 
@@ -512,6 +611,11 @@ func (m *Model) rebuildFeed() {
 			if !r.Watches(ev.Kind) || m.st.IsDismissed(ev.Key, ev.UpdatedAt) {
 				continue
 			}
+			feed = append(feed, ev)
+		}
+	}
+	for _, ev := range m.st.Inbox {
+		if m.cfg.Repo(ev.Repo) == nil && !m.st.IsDismissed(ev.Key, ev.UpdatedAt) {
 			feed = append(feed, ev)
 		}
 	}

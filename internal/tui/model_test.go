@@ -16,7 +16,11 @@ import (
 	"github.com/drlholloway/fast-lane/internal/state"
 )
 
-type fakeGH struct{ events []github.Event }
+type fakeGH struct {
+	events []github.Event
+	inbox  []github.InboxItem
+	since  time.Time
+}
 
 func (f *fakeGH) CurrentUser(context.Context) (string, error) { return "me", nil }
 func (f *fakeGH) ListRepos(context.Context) ([]github.Repo, error) {
@@ -27,6 +31,10 @@ func (f *fakeGH) ListStarred(context.Context) ([]github.Repo, error) {
 }
 func (f *fakeGH) ListMyOpenPRs(context.Context, string) ([]github.Event, error) {
 	return []github.Event{{Repo: "other/proj"}}, nil
+}
+func (f *fakeGH) Inbox(_ context.Context, _ string, since time.Time) ([]github.InboxItem, error) {
+	f.since = since
+	return f.inbox, nil
 }
 func (f *fakeGH) FetchEvents(_ context.Context, repo string, _ []config.EventKind) ([]github.Event, error) {
 	return f.events, nil
@@ -323,5 +331,72 @@ func TestBusySessionGetsChangeAfterItsTurn(t *testing.T) {
 	}
 	if s := m.mgr.Snapshot()[0]; s.Lines[len(s.Lines)-1].Text != "CI failed again" {
 		t.Fatalf("pending change not delivered: %+v", s.Lines)
+	}
+}
+
+func TestInboxRunsPersonalTriggers(t *testing.T) {
+	m, gh := newTestModel(t)
+	m.login = "me"
+	run(m, m.pollInbox())
+	if m.st.InboxSince.IsZero() || len(m.mgr.Snapshot()) != 0 {
+		t.Fatal("the first inbox poll should only record the time")
+	}
+
+	pr := github.Event{Key: github.EventKey("them/lib", config.KindPullRequest, 8), Repo: "them/lib",
+		Kind: config.KindPullRequest, Number: 8, Title: "Add y", HeadSHA: "h1", UpdatedAt: time.Now()}
+	issue := github.Event{Key: github.EventKey("them/lib", config.KindIssue, 9), Repo: "them/lib",
+		Kind: config.KindIssue, Number: 9, Title: "Question", UpdatedAt: time.Now()}
+	gh.inbox = []github.InboxItem{
+		{Event: pr, Change: github.Change{Trigger: config.TriggerReviewRequested, ID: "review_requested@h1"}},
+		{Event: issue, Change: github.Change{Trigger: config.TriggerMentioned, ID: "comment@5", Actor: "bob", Detail: "@me thoughts?"}},
+	}
+	run(m, m.pollInbox())
+	if gh.since.After(m.st.InboxSince) {
+		t.Fatal("the inbox should be read from before the last poll")
+	}
+	ss := m.mgr.Snapshot()
+	if len(ss) != 2 || len(ss[0].Allow)+len(ss[1].Allow) != 0 {
+		t.Fatalf("both should auto-run with nothing pre-approved by default: %+v", ss)
+	}
+	if len(m.feed) != 2 {
+		t.Fatalf("inbox items from unwatched repos belong in the feed: %v", m.feed)
+	}
+
+	// Seen again on the next poll: nothing new.
+	run(m, m.pollInbox())
+	if len(m.mgr.Snapshot()) != 2 {
+		t.Fatal("inbox items must not fire twice")
+	}
+}
+
+func TestInboxHonorsRulesAndSwitch(t *testing.T) {
+	m, gh := newTestModel(t)
+	m.login = "me"
+	m.st.InboxSince = time.Now()
+	m.cfg.AutoRules = map[config.RuleKey]config.Rules{
+		"pull_request:review_requested": {{Allow: []config.Action{config.ActionReview}}},
+		"issue:mentioned":               {{SkipLabels: []string{"discussion"}}},
+	}
+	pr := ev(1, config.KindPullRequest)
+	issue := ev(2, config.KindIssue)
+	issue.Labels = []string{"discussion"}
+	gh.inbox = []github.InboxItem{
+		{Event: pr, Change: github.Change{Trigger: config.TriggerReviewRequested, ID: "r"}},
+		{Event: issue, Change: github.Change{Trigger: config.TriggerMentioned, ID: "m"}},
+	}
+	run(m, m.pollInbox())
+	ss := m.mgr.Snapshot()
+	if len(ss) != 1 || len(ss[0].Allow) != 1 || ss[0].Allow[0] != config.ActionReview {
+		t.Fatalf("a rule should opt reviews into submitting and filter mentions: %+v", ss)
+	}
+
+	m2, gh2 := newTestModel(t)
+	m2.login = "me"
+	m2.st.InboxSince = time.Now()
+	m2.cfg.Inbox.AutoRun = false
+	gh2.inbox = gh.inbox
+	run(m2, m2.pollInbox())
+	if len(m2.mgr.Snapshot()) != 0 || len(m2.feed) != 2 || !m2.fresh[pr.Key] {
+		t.Fatalf("with inbox auto_run off, items are only listed: sessions %d, feed %d", len(m2.mgr.Snapshot()), len(m2.feed))
 	}
 }

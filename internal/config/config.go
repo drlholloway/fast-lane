@@ -57,7 +57,17 @@ const (
 	TriggerReviewRequested  Trigger = "review_requested"
 	TriggerReadyForReview   Trigger = "ready_for_review"
 	TriggerLabeled          Trigger = "labeled"
+	TriggerMentioned        Trigger = "mentioned"
+	TriggerAssigned         Trigger = "assigned"
 )
+
+// Personal reports whether t is aimed at the user (a review request, a
+// mention, an assignment). Personal triggers can come from repos the user
+// does not watch, follow Inbox.AutoRun instead of the repo's auto_run, and
+// auto-run with an empty rule unless auto_rules say otherwise.
+func (t Trigger) Personal() bool {
+	return t == TriggerReviewRequested || t == TriggerMentioned || t == TriggerAssigned
+}
 
 // Triggers lists the triggers k supports, most important first. When one
 // poll finds several changes on an item, the first that has a matching rule
@@ -66,9 +76,10 @@ func (k EventKind) Triggers() []Trigger {
 	switch k {
 	case KindPullRequest:
 		return []Trigger{TriggerOpened, TriggerChangesRequested, TriggerChecksFailed, TriggerConflict,
-			TriggerCommented, TriggerReviewRequested, TriggerReadyForReview, TriggerPushed, TriggerLabeled}
+			TriggerCommented, TriggerReviewRequested, TriggerMentioned, TriggerAssigned, TriggerReadyForReview,
+			TriggerPushed, TriggerLabeled}
 	case KindIssue:
-		return []Trigger{TriggerOpened, TriggerCommented, TriggerLabeled}
+		return []Trigger{TriggerOpened, TriggerCommented, TriggerMentioned, TriggerAssigned, TriggerLabeled}
 	}
 	return []Trigger{TriggerOpened}
 }
@@ -371,6 +382,7 @@ type Config struct {
 	WorkspaceDir  string   `json:"workspace_dir"`
 	MaxConcurrent int      `json:"max_concurrent"`
 	Claude        Claude   `json:"claude"`
+	Inbox         Inbox    `json:"inbox"`
 	// MaxAutoRuns caps how many times triggers may auto-run Claude on one
 	// item, so a fix that keeps failing CI cannot loop forever.
 	MaxAutoRuns int `json:"max_auto_runs"`
@@ -386,6 +398,16 @@ type Config struct {
 	path string
 }
 
+// Inbox controls watching the user's GitHub notifications for review
+// requests, mentions and assignments in any repository.
+type Inbox struct {
+	Enabled bool `json:"enabled"`
+	// AutoRun starts or resumes sessions for personal triggers without
+	// asking. Claude still asks before posting anything unless a rule's
+	// allow list says otherwise.
+	AutoRun bool `json:"auto_run"`
+}
+
 // Default returns a configuration with sensible defaults.
 func Default() *Config {
 	return &Config{
@@ -393,6 +415,7 @@ func Default() *Config {
 		WorkspaceDir:  filepath.Join(dataHome(), "fast-lane", "workspaces"),
 		MaxConcurrent: 2,
 		MaxAutoRuns:   5,
+		Inbox:         Inbox{Enabled: true, AutoRun: true},
 		Claude: Claude{
 			Path:           "claude",
 			PermissionMode: "manual",

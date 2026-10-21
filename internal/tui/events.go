@@ -80,7 +80,7 @@ func (m *Model) jumpToSession(id int) {
 }
 
 func (m *Model) eventsView(h int) string {
-	if len(m.cfg.Repos) == 0 {
+	if len(m.cfg.Repos) == 0 && len(m.feed) == 0 {
 		return "\n  " + sBold.Render("Nothing is being watched yet.") + "\n\n  " +
 			sMuted.Render("Press 3 to open Repos, then space to watch a repository.")
 	}

@@ -55,16 +55,32 @@ Every poll compares each open item with what Fast Lane saw last time. A change t
 | `checks_failed` | PRs | CI fails on the head commit |
 | `conflict` | PRs | The PR picks up merge conflicts with its base |
 | `commented` | PRs, issues | Someone comments, or leaves a review with comments |
-| `review_requested` | PRs | You're added as a reviewer |
+| `review_requested` | PRs | Your review is requested, on any repo (see [Inbox](#inbox)) |
+| `mentioned` | PRs, issues | Someone @-mentions you, on any repo |
+| `assigned` | PRs, issues | You're assigned, on any repo |
 | `ready_for_review` | PRs | A draft is marked ready |
 | `pushed` | PRs | Someone else pushes new commits |
 | `labeled` | PRs, issues | Labels are added |
 
 When one poll finds several changes on an item, Fast Lane acts on the first one in this order that has an auto rule. Your own activity never triggers anything (Claude acts as you, so its pushes and comments don't loop back), and neither do comments from bots. Each change fires once: checks failing on one commit, or one particular comment.
 
+### Inbox
+
+Fast Lane also reads your GitHub notifications for review requests, @-mentions (including team mentions) and assignments, on any repository you can see, not just the ones you watch. Before acting on one, it checks that it still applies: the PR or issue is still open, your review is still requested, the comment really mentions you, you're still assigned. Items from repos you don't watch show up in the Events tab too, and sessions clone the repo on first use. The first inbox read after you upgrade only records the time, so older notifications never fire.
+
+These three triggers are aimed at you, so they follow `inbox.auto_run` rather than a repo's `auto_run`, and they auto-run even without a rule. By default Claude reviews the PR or drafts a reply or fix, then asks before submitting the review, posting, or pushing. To let it act on its own, add a rule with an `allow` list:
+
+```json
+"pull_request:review_requested": { "allow": ["review"] },
+"issue:mentioned": { "allow": ["comment"] },
+"pull_request:mentioned": { "allow": ["comment"] }
+```
+
+A rule for one of these keys can also filter, for example `skip_bots` or `skip_labels`. To list them without running Claude, set `"inbox": { "auto_run": false }`. To stop reading notifications altogether, set `"enabled": false`.
+
 ### Safety defaults
 
-- New repos are watched **without** auto-run. Turn it on per repo with `a`, and narrow it with `auto_rules` (see [Configuration](#configuration)). Events that already exist when you start watching a repo never auto-run, only ones that show up later. Triggers other than `opened` auto-run only when an auto rule names them.
+- New repos are watched **without** auto-run. Turn it on per repo with `a`, and narrow it with `auto_rules` (see [Configuration](#configuration)). Events that already exist when you start watching a repo never auto-run, only ones that show up later. Other triggers auto-run only when an auto rule names them, except the personal ones from the [inbox](#inbox).
 - Auto-run acts on one item at most `max_auto_runs` times (default 5), so a fix that keeps failing CI can't loop forever.
 - Claude runs with `--permission-mode manual`, and only read-only tools are pre-approved (`Read`, `Grep`, `Glob`, `git status/diff/log/show`, and `gh pr view/diff/checks`, `gh issue view`, `gh run view/list`, and `gh api --method GET` for API reads). Anything else asks you first, including `gh api` writes.
 - Claude's system prompt tells it to ask before pushing, opening PRs, commenting, labeling, submitting reviews, closing, merging or dismissing alerts, unless an auto rule's `allow` list pre-approves that action. It always asks before pushing to the default branch or force-pushing.
@@ -80,6 +96,7 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
   "workspace_dir": "~/.local/share/fast-lane/workspaces",
   "max_concurrent": 2,
   "max_auto_runs": 5,
+  "inbox": { "enabled": true, "auto_run": true },
   "claude": {
     "path": "claude",
     "model": "",
@@ -116,6 +133,7 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
 }
 ```
 
+- **`inbox`**: read review requests, mentions and assignments from your notifications (`enabled`), and run Claude on them without asking (`auto_run`). Both default to on. See [Inbox](#inbox).
 - **`max_auto_runs`**: the most times auto-run will start or resume a session for one item. Sessions you start yourself don't count.
 - **`workspace_dir`**: repos without a `local_path` are cloned here with `gh repo clone` on first use and fetched before each new session.
 - **`permission_mode`**: any mode `claude --permission-mode` accepts (`manual`, `acceptEdits`, `auto`, …). Prompts the mode doesn't settle on its own still come to the TUI.
@@ -150,7 +168,7 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
   | `merge` | `gh pr merge` |
   | `dismiss_alert` | `gh api --method PATCH` on this repo's Dependabot and code scanning alerts |
 
-Runtime state lives in `~/.local/state/fast-lane/` (or `$XDG_STATE_HOME`): seen and dismissed events, each item's last snapshot and the changes that fired, session history in `state.json`, and the raw stream-json log of each session in `logs/`.
+Runtime state lives in `~/.local/state/fast-lane/` (or `$XDG_STATE_HOME`): seen and dismissed events, each item's last snapshot and the changes that fired, inbox items from unwatched repos, session history in `state.json`, and the raw stream-json log of each session in `logs/`.
 
 ## Development
 
@@ -160,8 +178,8 @@ go test -race ./...
 
 | Package | Role |
 | --- | --- |
-| `internal/github` | REST and GraphQL client built on `go-gh`, so it uses `gh`'s auth, plus change detection between polls |
-| `internal/auto` | Matches items and triggers to auto rules |
+| `internal/github` | REST and GraphQL client built on `go-gh`, so it uses `gh`'s auth, plus change detection between polls and the notifications inbox |
+| `internal/auto` | Matches items and triggers to auto rules and decides what auto-runs |
 | `internal/claude` | Session manager: spawns `claude`, parses stream-json and answers `can_use_tool` control requests |
 | `internal/tui` | Bubble Tea interface |
 | `internal/config`, `internal/state`, `internal/prompt` | Settings, persistence and prompt templates |

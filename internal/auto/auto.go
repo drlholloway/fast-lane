@@ -26,6 +26,27 @@ func RuleFor(cfg *config.Config, r config.Repo, ev github.Event, t config.Trigge
 	return config.Rule{}, false
 }
 
+// Decide reports whether trigger t on ev should start or resume a session
+// without asking, and the rule to use. Personal triggers follow the inbox's
+// auto-run setting and, when auto_rules have no key for them, run with an
+// empty rule, so Claude asks before posting. Other triggers follow the repo's
+// auto-run setting and RuleFor.
+func Decide(cfg *config.Config, r config.Repo, ev github.Event, t config.Trigger) (config.Rule, bool) {
+	if !t.Personal() {
+		if !r.AutoRun {
+			return config.Rule{}, false
+		}
+		return RuleFor(cfg, r, ev, t)
+	}
+	if !cfg.Inbox.AutoRun {
+		return config.Rule{}, false
+	}
+	if _, set := cfg.RulesFor(r)[config.Key(ev.Kind, t)]; set {
+		return RuleFor(cfg, r, ev, t)
+	}
+	return config.Rule{}, true
+}
+
 // Accepts reports whether ev passes every filter set on rule.
 func Accepts(rule config.Rule, ev github.Event) bool {
 	switch {
