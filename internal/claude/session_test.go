@@ -441,3 +441,35 @@ func TestSessionModel(t *testing.T) {
 		t.Fatalf("resuming under a rule without a model should use the default: %q", got)
 	}
 }
+
+func effortArg(call []string) string {
+	if i := slices.Index(call, "--effort"); i >= 0 && i+1 < len(call) {
+		return call[i+1]
+	}
+	return ""
+}
+
+func TestSessionEffort(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkspaceDir = t.TempDir()
+	cfg.Claude.Effort = "medium"
+	os.MkdirAll(filepath.Join(cfg.CloneDir("o/r"), ".git"), 0o755)
+	var calls [][]string
+	m := NewManager(cfg, "")
+	m.SetRunner(fakeRunner(t, &calls))
+	defer m.Shutdown()
+
+	id := m.StartPrompt(github.Event{Repo: "o/r", Kind: config.KindIssue, Number: 1}, "go", Options{Effort: "high"})
+	s := waitFor(t, m, id, func(s Session) bool { return len(s.Pending) == 1 })
+	if got := effortArg(lastClaudeCall(calls)); got != "high" || s.Effort != "high" {
+		t.Fatalf("the session's effort should replace the default: %q", got)
+	}
+	m.Respond(s.Pending[0], Answer{Allow: true})
+	waitFor(t, m, id, func(s Session) bool { return s.Status == StatusIdle })
+
+	m.Resume(id, "again", Options{})
+	waitFor(t, m, id, func(s Session) bool { return len(s.Pending) == 1 })
+	if got := effortArg(lastClaudeCall(calls)); got != "medium" {
+		t.Fatalf("a rule without an effort should fall back to the default: %q", got)
+	}
+}

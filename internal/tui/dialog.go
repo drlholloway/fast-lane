@@ -434,8 +434,8 @@ func (d *startDialog) view(m *Model) string {
 	var b strings.Builder
 	b.WriteString(sTitle.Render("Start a Claude session") + "\n")
 	b.WriteString(sMuted.Render(fit(fmt.Sprintf("%s %s #%d · runs in %s", d.ev.Repo, d.ev.Kind.Short(), d.ev.Number, d.workdir), w)) + "\n")
-	if d.opts.Model != "" {
-		b.WriteString(sMuted.Render(fit("Model: "+d.opts.Model, w)) + "\n")
+	if run := modelEffort(d.opts.Model, d.opts.Effort); run != "" {
+		b.WriteString(sMuted.Render(fit(run, w)) + "\n")
 	}
 	if len(d.opts.Allow) > 0 {
 		names := make([]string, len(d.opts.Allow))
@@ -462,6 +462,18 @@ func (d *startDialog) passthrough(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	d.ta, cmd = d.ta.Update(msg)
 	return cmd
+}
+
+// modelEffort describes a session's model and effort overrides, if any.
+func modelEffort(model, effort string) string {
+	var parts []string
+	if model != "" {
+		parts = append(parts, "Model: "+model)
+	}
+	if effort != "" {
+		parts = append(parts, "Effort: "+effort)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // ---- confirm ----

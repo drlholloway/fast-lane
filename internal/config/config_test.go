@@ -86,6 +86,8 @@ func TestLoadValidatesAutoRules(t *testing.T) {
 		`{"auto_rules":{"issue:checks_failed":{}}}`:                                                  "has no trigger",
 		`{"auto_rules":{"pull_request":{"model":"claude opus"}}}`:                                    "cannot contain spaces",
 		`{"auto_rules":{"pull_request":{"model":"claude-opus-5-5"}}}`:                                "",
+		`{"auto_rules":{"pull_request":{"effort":"high"}}}`:                                          "",
+		`{"auto_rules":{"pull_request":{"effort":"turbo"}}}`:                                         "must be one of",
 		`{"auto_rules":{"issue":{},"issue:opened":{}}}`:                                              "same key",
 		`{"prompts":{"pull_request:conflict":"{{.Number"}}`:                                          "prompts:",
 	}

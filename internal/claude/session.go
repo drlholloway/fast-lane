@@ -56,8 +56,9 @@ type Session struct {
 	Lines    []Line       `json:"lines,omitempty"`
 	// Allow lists the actions Claude may take without asking.
 	Allow []config.Action `json:"allow,omitempty"`
-	// Model overrides the configured model when set.
-	Model string `json:"model,omitempty"`
+	// Model and Effort override the configured ones when set.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 	// Dir is where Claude runs, set when the session first starts. When
 	// Checkout is set, Dir is a git worktree of that local checkout, made
 	// from its Remote.
@@ -228,12 +229,13 @@ func (m *Manager) Start(ev github.Event) (int, error) {
 	return m.StartPrompt(ev, text, Options{}), nil
 }
 
-// Options shape a session: what Claude may do without asking and which
-// model it runs.
+// Options shape a session: what Claude may do without asking, and the
+// model and effort it runs with.
 type Options struct {
 	Allow []config.Action
-	// Model overrides the configured model when set.
-	Model string
+	// Model and Effort override the configured ones when set.
+	Model  string
+	Effort string
 }
 
 // StartPrompt queues a new session for ev with custom instructions and
@@ -242,7 +244,7 @@ func (m *Manager) StartPrompt(ev github.Event, text string, o Options) int {
 	m.mu.Lock()
 	now := time.Now()
 	s := &Session{ID: m.nextID, Event: ev, Status: StatusQueued, Started: now, Updated: now,
-		Allow: o.Allow, Model: o.Model, nextInput: text}
+		Allow: o.Allow, Model: o.Model, Effort: o.Effort, nextInput: text}
 	m.nextID++
 	m.sessions = append(m.sessions, s)
 	m.queue = append(m.queue, s.ID)
@@ -279,7 +281,7 @@ func (m *Manager) resume(id int, text string, o *Options) error {
 	}
 	s.nextInput = text
 	if o != nil {
-		s.Allow, s.Model = o.Allow, o.Model
+		s.Allow, s.Model, s.Effort = o.Allow, o.Model, o.Effort
 	}
 	s.Status = StatusQueued
 	s.Err = ""
@@ -505,7 +507,8 @@ func (m *Manager) execute(id int, p *proc, input string) {
 
 	m.mu.Lock()
 	s := m.find(id)
-	repo, number, resume, allow, model := s.Event.Repo, s.Event.Number, s.ClaudeID, s.Allow, s.Model
+	repo, number, resume, allow := s.Event.Repo, s.Event.Number, s.ClaudeID, s.Allow
+	model, effort := s.Model, s.Effort
 	dir, checkout, remote := s.Dir, s.Checkout, s.Remote
 	cfg := m.cfg
 	m.mu.Unlock()
@@ -526,6 +529,9 @@ func (m *Manager) execute(id int, p *proc, input string) {
 	c := cfg.Claude
 	if model != "" {
 		c.Model = model
+	}
+	if effort != "" {
+		c.Effort = effort
 	}
 	err = m.runClaude(id, p, c, dir, repo, number, resume, allow, checkout != "", input)
 	m.mu.Lock()

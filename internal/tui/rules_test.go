@@ -197,9 +197,13 @@ func TestRulesModel(t *testing.T) {
 	if !strings.Contains(m.View(), "claude-sonnet-5-5") {
 		t.Fatalf("the model field should suggest model IDs:\n%s", m.View())
 	}
+	keys(m, "down", "right", "right", "right") // effort: default -> low -> medium -> high
+	if d.effort != "high" {
+		t.Fatalf("effort = %q", d.effort)
+	}
 	keys(m, "ctrl+s")
 	rs := m.cfg.AutoRules["pull_request"]
-	if len(rs) != 1 || rs[0].Model != "claude-opus-5-5" || !strings.Contains(m.View(), "claude-opus-5-5") {
+	if len(rs) != 1 || rs[0].Model != "claude-opus-5-5" || rs[0].Effort != "high" || !strings.Contains(m.View(), "claude-opus-5-5") {
 		t.Fatalf("model not saved or shown: %+v", rs)
 	}
 
@@ -212,7 +216,7 @@ func TestRulesModel(t *testing.T) {
 	m.cfg.Repo("me/app").AutoRun = true
 	gh.events = append(gh.events, ev(4, config.KindPullRequest))
 	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
-	if ss := m.mgr.Snapshot(); len(ss) != 1 || ss[0].Model != "claude-opus-5-5" {
+	if ss := m.mgr.Snapshot(); len(ss) != 1 || ss[0].Model != "claude-opus-5-5" || ss[0].Effort != "high" {
 		t.Fatalf("auto-run should use the rule's model: %+v", ss)
 	}
 	keys(m, "1")
@@ -222,7 +226,7 @@ func TestRulesModel(t *testing.T) {
 		}
 	}
 	keys(m, "enter")
-	if !strings.Contains(m.View(), "Model: claude-opus-5-5") {
+	if !strings.Contains(m.View(), "Model: claude-opus-5-5 · Effort: high") {
 		t.Fatalf("the start dialog should show the model:\n%s", m.View())
 	}
 }

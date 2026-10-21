@@ -243,6 +243,8 @@ type Rule struct {
 	// Model replaces Claude.Model for sessions this rule governs, such as
 	// claude-opus-5-5 or an alias like sonnet.
 	Model string `json:"model,omitempty"`
+	// Effort replaces Claude.Effort for sessions this rule governs.
+	Effort string `json:"effort,omitempty"`
 }
 
 // Rules are the rules for one key, tried in order; the first that accepts an
@@ -353,6 +355,9 @@ func (r Rule) validate(key RuleKey, kind EventKind) error {
 	}
 	if strings.ContainsFunc(r.Model, unicode.IsSpace) {
 		return fmt.Errorf("%s: model %q cannot contain spaces", k, r.Model)
+	}
+	if r.Effort != "" && !slices.Contains(Efforts, r.Effort) {
+		return fmt.Errorf("%s: effort %q must be one of %s", k, r.Effort, strings.Join(Efforts, ", "))
 	}
 	for _, a := range r.Allow {
 		if _, ok := actionInfo[a]; !ok {

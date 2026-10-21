@@ -575,7 +575,7 @@ type pendingRun struct {
 
 // options turns the rule governing a session into its options.
 func options(r config.Rule) claude.Options {
-	return claude.Options{Allow: r.Allow, Model: r.Model}
+	return claude.Options{Allow: r.Allow, Model: r.Model, Effort: r.Effort}
 }
 
 // runChange acts on change c. It resumes the item's last session so Claude

@@ -143,7 +143,7 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
     "issue": "Triage issue #{{.Number}} in {{.Repo}}: {{.Title}}\n\n{{.Body}}"
   },
   "auto_rules": {
-    "dependabot_alert": { "min_severity": "high", "model": "claude-haiku-5-5", "allow": ["edit", "push_branch", "open_pr"] },
+    "dependabot_alert": { "min_severity": "high", "model": "claude-haiku-5-5", "effort": "low", "allow": ["edit", "push_branch", "open_pr"] },
     "pull_request": { "skip_drafts": true, "skip_bots": true, "skip_authors": ["you"] },
     "pull_request:checks_failed": { "allow": ["edit", "update_pr"] },
     "pull_request:changes_requested": { "skip_bots": true, "allow": ["edit", "update_pr", "comment"] }
@@ -172,7 +172,7 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
 - **`code_dirs`**: where to look for local checkouts (see [Local checkouts](#local-checkouts)). Set it to `[]` to always clone.
 - **`local_path`** (per repo): the checkout to make worktrees from, when the scan doesn't find the right one.
 - **`workspace_dir`**: repos without a local checkout are cloned here with `gh repo clone` on first use and fetched before each new session. Session worktrees live under `.worktrees/` here.
-- **`model`** / **`effort`**: passed to `claude --model` and `claude --effort` (`low`, `medium`, `high`, `xhigh` or `max`). Leave either out to use Claude Code's default. A rule's `model` replaces `model` for its sessions.
+- **`model`** / **`effort`**: passed to `claude --model` and `claude --effort` (`low`, `medium`, `high`, `xhigh` or `max`). Leave either out to use Claude Code's default. A rule's `model` and `effort` replace these for its sessions.
 - **`permission_mode`**: any mode `claude --permission-mode` accepts (`manual`, `acceptEdits`, `auto`, …). Prompts the mode doesn't settle on its own still come to the TUI.
 - **`prompts`**: override the instructions for a kind (`pull_request`, `issue`, `dependabot_alert`, `code_scanning_alert`) or a kind and trigger (`pull_request:checks_failed`). An auto rule's `prompt` takes precedence. A trigger with no prompt of its own uses its kind's, with a line saying what triggered it. Templates use Go `text/template` and can use:
   - Every item: `.Repo`, `.Number`, `.Title`, `.URL`, `.Author`, `.Bot`, `.Labels`, `.Body`, `.Kind`, `.CreatedAt`, `.UpdatedAt`.
@@ -191,6 +191,7 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
   A rule also shapes the sessions it covers, whether they auto-run or you start them with `enter`:
   - `prompt`: a template that replaces the prompt for that kind and trigger (same fields as `prompts`).
   - `model`: the model those sessions run, such as `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` or `claude-fable-5-1`, or an alias Claude Code accepts such as `opus`. It replaces the Model setting, so you can, say, give Dependabot bumps a fast model and review requests a stronger one. A session keeps its model across replies; when a trigger resumes it under another rule, it switches to that rule's model, or back to the default if that rule doesn't set one.
+  - `effort`: the effort level those sessions run at (`low`, `medium`, `high`, `xhigh` or `max`), replacing the Effort setting the same way `model` does.
   - `allow`: actions Claude may take without asking. Each one pre-approves the tools below for that session and tells Claude it needs no approval. Anything not allowed still comes to you as a question or permission dialog.
 
   | Action | Pre-approves |

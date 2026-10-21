@@ -210,7 +210,10 @@ func (m *Model) sessionsView(h int) string {
 	}
 	model := ""
 	if s.Model != "" {
-		model = " · " + s.Model
+		model += " · " + s.Model
+	}
+	if s.Effort != "" {
+		model += " · " + s.Effort + " effort"
 	}
 	sub := sMuted.Render(fit(fmt.Sprintf("%s · %s #%d · started %s%s · %s", s.Event.Repo, s.Event.Kind.Short(),
 		s.Event.Number, started, model, m.sessionDir(s)), m.transcript.Width))

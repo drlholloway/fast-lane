@@ -241,11 +241,12 @@ func (m *Model) rulesView(h int) string {
 		wNum    = 2
 		wPrompt = 7
 	)
-	wAllow := clamp(m.width/4, 12, 34)
+	const wEffort = 7
+	wAllow := clamp(m.width/5, 12, 30)
 	wModel := clamp(m.width/7, 8, 17) // fits claude-sonnet-5-5 at 120 columns
-	wFilter := m.width - wKey - wNum - wAllow - wModel - wPrompt - 7
+	wFilter := m.width - wKey - wNum - wAllow - wModel - wEffort - wPrompt - 8
 	b.WriteString(sMuted.Render(fit("  "+fit("KEY", wKey)+" "+fit("#", wNum)+" "+fit("FILTERS", wFilter)+" "+
-		fit("ALLOW", wAllow)+" "+fit("MODEL", wModel)+" PROMPT", m.width)) + "\n")
+		fit("ALLOW", wAllow)+" "+fit("MODEL", wModel)+" "+fit("EFFORT", wEffort)+" PROMPT", m.width)) + "\n")
 	h--
 	m.ruleCursor = clamp(m.ruleCursor, 0, len(rows)-1)
 	start := window(m.ruleCursor, h, len(rows))
@@ -267,8 +268,12 @@ func (m *Model) rulesView(h int) string {
 		if r.rule.Model != "" {
 			model = fit(r.rule.Model, wModel)
 		}
+		effort := sMuted.Render(fit("default", wEffort))
+		if r.rule.Effort != "" {
+			effort = fit(r.rule.Effort, wEffort)
+		}
 		row := "  " + fit(string(r.key), wKey) + " " + fit(fmt.Sprint(r.idx+1), wNum) + " " +
-			fit(ruleSummary(r.rule), wFilter) + " " + fit(allow, wAllow) + " " + model + " " + pr
+			fit(ruleSummary(r.rule), wFilter) + " " + fit(allow, wAllow) + " " + model + " " + effort + " " + pr
 		if m.inherited(scope) {
 			row = sMuted.Render(ansi.Strip(row))
 		}
@@ -323,6 +328,7 @@ const (
 	fSkipBots
 	fAllow
 	fModel
+	fEffort
 	fPrompt
 )
 
@@ -344,6 +350,7 @@ type ruleDialog struct {
 	skipBots   bool
 	allow      map[config.Action]bool
 	allowAt    int
+	effort     string // empty means the default effort
 	prompt     string // empty means the default template
 
 	cursor  int
@@ -356,7 +363,7 @@ type ruleDialog struct {
 
 func newRuleDialog(m *Model, scope string, key config.RuleKey, idx int, r config.Rule, k config.EventKind, t config.Trigger) *ruleDialog {
 	d := &ruleDialog{scope: scope, origKey: key, origIdx: idx, kind: k, trigger: t, severity: r.MinSeverity,
-		skipDrafts: r.SkipDrafts, skipBots: r.SkipBots, prompt: r.Prompt, allow: map[config.Action]bool{},
+		skipDrafts: r.SkipDrafts, skipBots: r.SkipBots, effort: r.Effort, prompt: r.Prompt, allow: map[config.Action]bool{},
 		inputs: map[ruleField]*textinput.Model{}, width: dialogWidth(m.width), height: m.height}
 	for _, a := range r.Allow {
 		d.allow[a] = true
@@ -395,7 +402,7 @@ func (d *ruleDialog) fields() []ruleField {
 	if d.kind == config.KindPullRequest {
 		fs = append(fs, fSkipDrafts)
 	}
-	return append(fs, fSkipBots, fAllow, fModel, fPrompt)
+	return append(fs, fSkipBots, fAllow, fModel, fEffort, fPrompt)
 }
 
 func (d *ruleDialog) field() ruleField {
@@ -465,6 +472,10 @@ func (d *ruleDialog) update(m *Model, msg tea.KeyMsg) (dialog, tea.Cmd) {
 	case fSeverity:
 		if step != 0 {
 			d.severity = cycle(severities, d.severity, step)
+		}
+	case fEffort:
+		if step != 0 {
+			d.effort = cycle(append([]string{""}, config.Efforts...), d.effort, step)
 		}
 	case fSkipDrafts, fSkipBots:
 		if key == " " || key == "enter" {
@@ -549,6 +560,7 @@ func (d *ruleDialog) rule() config.Rule {
 		SkipBots:    d.skipBots,
 		Prompt:      d.prompt,
 		Model:       strings.TrimSpace(d.inputs[fModel].Value()),
+		Effort:      d.effort,
 	}
 	if slices.Contains(shown, fSeverity) {
 		r.MinSeverity = d.severity
@@ -641,6 +653,15 @@ func (d *ruleDialog) view(m *Model) string {
 			label, val = "Skip bots", checkbox(d.skipBots)
 		case fAllow:
 			label, val = "Allow", d.allowView(f == cur, d.width-6-wl-2)
+		case fEffort:
+			eff := d.effort
+			if eff == "" {
+				eff = "default"
+				if def := m.cfg.Claude.Effort; def != "" {
+					eff += " (" + def + ")"
+				}
+			}
+			label, val = "Effort", "‹ "+eff+" ›"
 		case fModel:
 			label, val = "Model", d.inputs[f].View()
 			if f == cur {
@@ -717,7 +738,7 @@ func (d *ruleDialog) help() string {
 		return helpLine("ctrl+s", "keep", "ctrl+r", "reset to default", "alt+enter", "newline", "esc", "discard")
 	}
 	switch d.field() {
-	case fKind, fTrigger, fSeverity:
+	case fKind, fTrigger, fSeverity, fEffort:
 		return helpLine("←/→", "change", "↑/↓", "move", "ctrl+s", "save", "esc", "cancel")
 	case fAllow:
 		return helpLine("←/→", "pick", "space", "toggle", "↑/↓", "move", "ctrl+s", "save", "esc", "cancel")
