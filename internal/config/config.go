@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -69,6 +70,62 @@ type Repo struct {
 	Events []EventKind `json:"events"`
 	// AutoRun starts a Claude session for new events without asking.
 	AutoRun bool `json:"auto_run"`
+	// AutoRules, when set, replace Config.AutoRules for this repo.
+	AutoRules map[EventKind]Rule `json:"auto_rules,omitempty"`
+}
+
+// Rule filters which new events of one kind auto-run. Every field that is set
+// must match; list fields match when any entry does. Comparisons ignore case.
+type Rule struct {
+	// MinSeverity skips alerts below this level. See SeverityRank.
+	MinSeverity string `json:"min_severity,omitempty"`
+	// Labels requires at least one of these labels.
+	Labels []string `json:"labels,omitempty"`
+	// SkipLabels skips events carrying any of these labels.
+	SkipLabels []string `json:"skip_labels,omitempty"`
+	// Authors requires the event to be opened by one of these logins.
+	Authors []string `json:"authors,omitempty"`
+	// SkipAuthors skips events opened by any of these logins.
+	SkipAuthors []string `json:"skip_authors,omitempty"`
+	// SkipDrafts skips draft pull requests.
+	SkipDrafts bool `json:"skip_drafts,omitempty"`
+	// SkipBots skips events opened by bot accounts.
+	SkipBots bool `json:"skip_bots,omitempty"`
+}
+
+func (r Rule) validate(k EventKind) error {
+	if !slices.Contains(AllKinds, k) {
+		return fmt.Errorf("unknown event kind %q", k)
+	}
+	alert := k == KindDependabot || k == KindCodeScanning
+	switch {
+	case r.MinSeverity != "" && !alert:
+		return fmt.Errorf("%s: min_severity only applies to alerts", k)
+	case r.MinSeverity != "" && SeverityRank(r.MinSeverity) == 0:
+		return fmt.Errorf("%s: unknown min_severity %q", k, r.MinSeverity)
+	case (len(r.Labels) > 0 || len(r.SkipLabels) > 0) && alert:
+		return fmt.Errorf("%s: labels and skip_labels only apply to pull requests and issues", k)
+	case r.SkipDrafts && k != KindPullRequest:
+		return fmt.Errorf("%s: skip_drafts only applies to pull requests", k)
+	}
+	return nil
+}
+
+// SeverityRank orders alert severities from 1 (lowest) to 4, returning 0 for
+// unknown values. Code scanning's note, warning and error rank with low,
+// medium and high.
+func SeverityRank(s string) int {
+	switch strings.ToLower(s) {
+	case "low", "note":
+		return 1
+	case "medium", "moderate", "warning":
+		return 2
+	case "high", "error":
+		return 3
+	case "critical":
+		return 4
+	}
+	return 0
 }
 
 // Watches reports whether the repo watches the given kind.
@@ -107,7 +164,10 @@ type Config struct {
 	// Prompts overrides the default prompt template for an event kind.
 	// Templates use Go text/template syntax; see the README for fields.
 	Prompts map[EventKind]string `json:"prompts,omitempty"`
-	Repos   []Repo               `json:"repos"`
+	// AutoRules limits auto-run to the kinds listed, filtered by their rule.
+	// When no rules are set anywhere, every new event auto-runs.
+	AutoRules map[EventKind]Rule `json:"auto_rules,omitempty"`
+	Repos     []Repo             `json:"repos"`
 
 	path string
 }
@@ -151,8 +211,18 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	cfg.WorkspaceDir = expandHome(cfg.WorkspaceDir)
+	for k, r := range cfg.AutoRules {
+		if err := r.validate(k); err != nil {
+			return nil, fmt.Errorf("%s: auto_rules: %w", path, err)
+		}
+	}
 	for i := range cfg.Repos {
 		cfg.Repos[i].LocalPath = expandHome(cfg.Repos[i].LocalPath)
+		for k, r := range cfg.Repos[i].AutoRules {
+			if err := r.validate(k); err != nil {
+				return nil, fmt.Errorf("%s: %s auto_rules: %w", path, cfg.Repos[i].FullName, err)
+			}
+		}
 	}
 	if cfg.MaxConcurrent < 1 {
 		cfg.MaxConcurrent = 1
@@ -214,6 +284,18 @@ func (c *Config) Unwatch(fullName string) {
 			return
 		}
 	}
+}
+
+// RulesFor returns the auto rules in effect for r: its own when it has any,
+// otherwise the global ones. Nil means every kind auto-runs unfiltered.
+func (c *Config) RulesFor(r Repo) map[EventKind]Rule {
+	if len(r.AutoRules) > 0 {
+		return r.AutoRules
+	}
+	if len(c.AutoRules) > 0 {
+		return c.AutoRules
+	}
+	return nil
 }
 
 // WorkDir returns the directory Claude should run in for fullName.

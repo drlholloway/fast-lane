@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/cli/go-gh/v2/pkg/browser"
 
+	"github.com/drlholloway/fast-lane/internal/auto"
 	"github.com/drlholloway/fast-lane/internal/claude"
 	"github.com/drlholloway/fast-lane/internal/config"
 	"github.com/drlholloway/fast-lane/internal/github"
@@ -305,13 +306,17 @@ func (m *Model) onPolled(msg polledMsg) tea.Cmd {
 	}
 	m.events[strings.ToLower(msg.repo)] = msg.events
 	now := time.Now()
-	newCount, started := 0, 0
+	newCount, started, filtered := 0, 0, 0
 	for _, ev := range msg.events {
 		if !m.st.Observe(ev.Repo, ev.Key, now) {
 			continue
 		}
 		newCount++
 		m.fresh[ev.Key] = true
+		if rc.AutoRun && !auto.Match(m.cfg, *rc, ev) {
+			filtered++
+			continue
+		}
 		if rc.AutoRun && !m.hasSession(ev.Key) {
 			if err := m.startSession(ev); err != nil {
 				m.setStatus(true, "Auto-run %s failed: %v", ev.Key, err)
@@ -325,9 +330,16 @@ func (m *Model) onPolled(msg polledMsg) tea.Cmd {
 	}
 	m.dirty = true
 	m.rebuildFeed()
+	skipped := ""
+	if filtered > 0 {
+		skipped = fmt.Sprintf(", %d didn't match auto rules", filtered)
+	}
 	switch {
 	case started > 0:
-		m.setStatus(false, "%s: %d new, started %d Claude session(s)", msg.repo, newCount, started)
+		m.setStatus(false, "%s: %d new, started %d Claude session(s)%s", msg.repo, newCount, started, skipped)
+	case filtered > 0:
+		m.setStatus(false, "%s: %d new event(s)%s", msg.repo, newCount, skipped)
+		return bell
 	case newCount > 0:
 		m.setStatus(false, "%s: %d new event(s)", msg.repo, newCount)
 		return bell

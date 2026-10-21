@@ -149,6 +149,28 @@ func TestAutoRunStartsSessionForNewEvents(t *testing.T) {
 	}
 }
 
+func TestAutoRulesFilterNewEvents(t *testing.T) {
+	m, gh := newTestModel(t)
+	m.cfg.AutoRules = map[config.EventKind]config.Rule{config.KindDependabot: {MinSeverity: "high"}}
+	m.cfg.Watch("me/app").AutoRun = true
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+
+	low, high := ev(4, config.KindDependabot), ev(5, config.KindDependabot)
+	low.Severity, high.Severity = "low", "critical"
+	gh.events = []github.Event{ev(2, config.KindPullRequest), low, high}
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+	ss := m.mgr.Snapshot()
+	if len(ss) != 1 || ss[0].Event.Number != 5 {
+		t.Fatalf("only the critical alert should auto-run, got %+v", ss)
+	}
+	if !strings.Contains(m.status, "2 didn't match auto rules") {
+		t.Fatalf("status should report filtered events: %q", m.status)
+	}
+	if len(m.feed) != 3 {
+		t.Fatalf("filtered events still belong in the feed: %v", m.feed)
+	}
+}
+
 func TestPermissionDialogFlow(t *testing.T) {
 	m, _ := newTestModel(t)
 	s := claude.Session{ID: 1, Event: ev(1, config.KindIssue), Status: claude.StatusWaiting}

@@ -165,6 +165,9 @@ func (m *Model) reposKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		rc.AutoRun = !rc.AutoRun
+		if rc.AutoRun && m.cfg.RulesFor(*rc) != nil {
+			return m.saveConfig("Auto-run on for %s: new events matching your auto rules start Claude sessions without asking", r.FullName)
+		}
 		if rc.AutoRun {
 			return m.saveConfig("Auto-run on for %s: new events start Claude sessions without asking", r.FullName)
 		}

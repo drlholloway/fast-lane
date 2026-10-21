@@ -19,7 +19,7 @@ func TestNextLink(t *testing.T) {
 
 func TestIssuesDropPullRequests(t *testing.T) {
 	var items []issueJSON
-	raw := `[{"number":1,"title":"bug","user":{"login":"a"}},
+	raw := `[{"number":1,"title":"bug","user":{"login":"a","type":"Bot"},"labels":[{"name":"bug"},{"name":"p1"}]},
 	         {"number":2,"title":"pr","pull_request":{}}]`
 	if err := json.Unmarshal([]byte(raw), &items); err != nil {
 		t.Fatal(err)
@@ -27,6 +27,9 @@ func TestIssuesDropPullRequests(t *testing.T) {
 	evs := issuesToEvents("o/r", config.KindIssue, items)
 	if len(evs) != 1 || evs[0].Number != 1 || evs[0].Author != "a" {
 		t.Fatalf("got %+v", evs)
+	}
+	if !evs[0].Bot || len(evs[0].Labels) != 2 || evs[0].Labels[1] != "p1" {
+		t.Fatalf("labels or bot flag not parsed: %+v", evs[0])
 	}
 	if evs[0].Key != "o/r:issue:1" {
 		t.Fatalf("key %q", evs[0].Key)

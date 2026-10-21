@@ -1,7 +1,9 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -62,5 +64,46 @@ func TestWorkDir(t *testing.T) {
 	cfg.Watch("o/r").LocalPath = "/src/r"
 	if got := cfg.WorkDir("o/r"); got != "/src/r" {
 		t.Fatalf("got %s", got)
+	}
+}
+
+func TestLoadValidatesAutoRules(t *testing.T) {
+	tests := map[string]string{
+		`{"auto_rules":{"dependabot_alert":{"min_severity":"high"}},
+		  "repos":[{"full_name":"o/r","auto_rules":{"pull_request":{"skip_drafts":true,"labels":["bug"]}}}]}`: "",
+		`{"auto_rules":{"pr":{}}}`:                                                    "unknown event kind",
+		`{"auto_rules":{"issue":{"min_severity":"high"}}}`:                            "only applies to alerts",
+		`{"auto_rules":{"dependabot_alert":{"min_severity":"severe"}}}`:               "unknown min_severity",
+		`{"auto_rules":{"code_scanning_alert":{"labels":["x"]}}}`:                     "only apply to pull requests",
+		`{"repos":[{"full_name":"o/r","auto_rules":{"issue":{"skip_drafts":true}}}]}`: "o/r auto_rules",
+	}
+	for raw, want := range tests {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(path)
+		switch {
+		case want == "" && err != nil:
+			t.Errorf("%s: unexpected error %v", raw, err)
+		case want != "" && (err == nil || !strings.Contains(err.Error(), want)):
+			t.Errorf("%s: got error %v, want one containing %q", raw, err, want)
+		}
+	}
+}
+
+func TestRulesFor(t *testing.T) {
+	cfg := Default()
+	r := Repo{FullName: "o/r"}
+	if cfg.RulesFor(r) != nil {
+		t.Fatal("no rules anywhere should return nil")
+	}
+	cfg.AutoRules = map[EventKind]Rule{KindIssue: {}}
+	if _, ok := cfg.RulesFor(r)[KindIssue]; !ok {
+		t.Fatal("repo without rules should inherit the global ones")
+	}
+	r.AutoRules = map[EventKind]Rule{KindPullRequest: {}}
+	if _, ok := cfg.RulesFor(r)[KindIssue]; ok {
+		t.Fatal("repo rules should replace the global ones")
 	}
 }

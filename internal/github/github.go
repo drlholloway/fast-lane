@@ -42,6 +42,8 @@ type Event struct {
 	Title     string
 	URL       string
 	Author    string
+	Bot       bool
+	Labels    []string
 	Branch    string
 	Severity  string
 	Body      string
@@ -234,14 +236,18 @@ func SortEvents(evs []Event) {
 
 type userJSON struct {
 	Login string `json:"login"`
+	Type  string `json:"type"`
 }
 
 type issueJSON struct {
-	Number        int       `json:"number"`
-	Title         string    `json:"title"`
-	HTMLURL       string    `json:"html_url"`
-	Body          string    `json:"body"`
-	User          userJSON  `json:"user"`
+	Number  int      `json:"number"`
+	Title   string   `json:"title"`
+	HTMLURL string   `json:"html_url"`
+	Body    string   `json:"body"`
+	User    userJSON `json:"user"`
+	Labels  []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
 	Draft         bool      `json:"draft"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
@@ -261,6 +267,7 @@ func (it issueJSON) event(repo string, k config.EventKind) Event {
 		Title:     it.Title,
 		URL:       it.HTMLURL,
 		Author:    it.User.Login,
+		Bot:       it.User.Type == "Bot",
 		Body:      truncate(it.Body, 4000),
 		Draft:     it.Draft,
 		CreatedAt: it.CreatedAt,
@@ -268,6 +275,9 @@ func (it issueJSON) event(repo string, k config.EventKind) Event {
 	}
 	if it.Head != nil {
 		e.Branch = it.Head.Ref
+	}
+	for _, l := range it.Labels {
+		e.Labels = append(e.Labels, l.Name)
 	}
 	return e
 }
@@ -327,6 +337,7 @@ func (a dependabotJSON) event(repo string) Event {
 		Title:     fmt.Sprintf("%s: %s", pkg.Name, a.SecurityAdvisory.Summary),
 		URL:       a.HTMLURL,
 		Author:    "dependabot",
+		Bot:       true,
 		Severity:  a.SecurityAdvisory.Severity,
 		Body:      body,
 		CreatedAt: a.CreatedAt,

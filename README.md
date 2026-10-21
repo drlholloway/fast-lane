@@ -46,7 +46,7 @@ When Claude finishes a turn, press `enter` on the session to reply. The conversa
 
 ### Safety defaults
 
-- New repos are watched **without** auto-run. Turn it on per repo with `a`. Events that already exist when you start watching a repo never auto-run, only ones that show up later.
+- New repos are watched **without** auto-run. Turn it on per repo with `a`, and narrow it with `auto_rules` (see [Configuration](#configuration)). Events that already exist when you start watching a repo never auto-run, only ones that show up later.
 - Claude runs with `--permission-mode manual`, and only read-only tools are pre-approved (`Read`, `Grep`, `Glob`, `git status/diff/log/show`, and `gh pr view/diff/checks`, `gh issue view`, `gh api`). Anything else asks you first.
 - The built-in prompts tell Claude to ask before pushing, merging, closing, submitting reviews or dismissing alerts.
 - Sessions for the same repo run one at a time because they share a working copy. At most `max_concurrent` sessions run overall.
@@ -71,12 +71,19 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
   "prompts": {
     "issue": "Triage issue #{{.Number}} in {{.Repo}}: {{.Title}}\n\n{{.Body}}"
   },
+  "auto_rules": {
+    "dependabot_alert": { "min_severity": "high" },
+    "pull_request": { "skip_drafts": true, "skip_bots": true, "skip_authors": ["you"] }
+  },
   "repos": [
     {
       "full_name": "you/your-repo",
       "local_path": "~/code/your-repo",
       "events": ["pull_request", "issue", "dependabot_alert", "code_scanning_alert"],
-      "auto_run": false
+      "auto_run": false,
+      "auto_rules": {
+        "issue": { "labels": ["bug"], "skip_labels": ["wontfix"] }
+      }
     }
   ]
 }
@@ -84,7 +91,13 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
 
 - **`workspace_dir`**: repos without a `local_path` are cloned here with `gh repo clone` on first use and fetched before each new session.
 - **`permission_mode`**: any mode `claude --permission-mode` accepts (`manual`, `acceptEdits`, `auto`, …). Prompts the mode doesn't settle on its own still come to the TUI.
-- **`prompts`**: override the instructions for an event kind (`pull_request`, `issue`, `dependabot_alert`, `code_scanning_alert`). Templates use Go `text/template` and can use `.Repo`, `.Number`, `.Title`, `.URL`, `.Author`, `.Branch`, `.Severity`, `.Body`, `.Draft`, `.Kind`, `.CreatedAt` and `.UpdatedAt`. The defaults are in [`internal/prompt/prompt.go`](internal/prompt/prompt.go).
+- **`prompts`**: override the instructions for an event kind (`pull_request`, `issue`, `dependabot_alert`, `code_scanning_alert`). Templates use Go `text/template` and can use `.Repo`, `.Number`, `.Title`, `.URL`, `.Author`, `.Bot`, `.Labels`, `.Branch`, `.Severity`, `.Body`, `.Draft`, `.Kind`, `.CreatedAt` and `.UpdatedAt`. The defaults are in [`internal/prompt/prompt.go`](internal/prompt/prompt.go).
+- **`auto_rules`**: choose which new events auto-run on repos with `auto_run` on. With no rules anywhere, every new event auto-runs. Once rules exist, only the kinds listed auto-run, and only events that pass every filter set on their kind's rule (an empty rule `{}` accepts every event of that kind). A repo's own `auto_rules` replace the global ones entirely. Events that don't match still show up in the feed for you to start by hand. Filters, all compared without regard to case:
+  - `min_severity` (alerts only): `low`, `medium`, `high` or `critical`. Code scanning's `note`, `warning` and `error` rank with `low`, `medium` and `high`.
+  - `labels` / `skip_labels` (PRs and issues only): require at least one of these labels / skip events with any of them.
+  - `authors` / `skip_authors`: require / skip these logins.
+  - `skip_drafts` (PRs only): skip draft pull requests.
+  - `skip_bots`: skip events opened by bot accounts, Dependabot alerts included.
 
 Runtime state lives in `~/.local/state/fast-lane/` (or `$XDG_STATE_HOME`): seen and dismissed events, session history in `state.json`, and the raw stream-json log of each session in `logs/`.
 
