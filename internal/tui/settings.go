@@ -178,6 +178,15 @@ var settings = []setting{
 					return m.saveConfig("Model saved for new turns"), nil
 				})
 		}},
+	{label: "Effort", about: "How hard Claude thinks, passed to claude --effort. enter cycles Claude Code's default, low, medium, high, xhigh, max.",
+		value: func(m *Model) string { return orNone(m.cfg.Claude.Effort, "Claude Code's default") },
+		edit: func(m *Model) tea.Cmd {
+			m.cfg.Claude.Effort = cycle(append([]string{""}, config.Efforts...), m.cfg.Claude.Effort, 1)
+			if m.cfg.Claude.Effort == "" {
+				return m.saveConfig("Effort: Claude Code's default for new turns")
+			}
+			return m.saveConfig("Effort %s for new turns", m.cfg.Claude.Effort)
+		}},
 	{label: "Permission mode", about: "How Claude Code settles permission prompts on its own; the rest come to you. enter cycles manual, acceptEdits, auto.",
 		value: func(m *Model) string { return m.cfg.Claude.PermissionMode },
 		edit: func(m *Model) tea.Cmd {

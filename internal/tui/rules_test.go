@@ -2,10 +2,12 @@ package tui
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/drlholloway/fast-lane/internal/config"
+	"github.com/drlholloway/fast-lane/internal/github"
 )
 
 func TestRulesAddRuleFromForm(t *testing.T) {
@@ -182,5 +184,45 @@ func TestReposJumpToRules(t *testing.T) {
 	keys(m, "3", "r")
 	if m.tab != tabRules || m.scope() != "me/app" {
 		t.Fatalf("r should open the repo's rules: tab %d scope %q", m.tab, m.scope())
+	}
+}
+
+func TestRulesModel(t *testing.T) {
+	m, gh := newTestModel(t)
+	keys(m, "4", "n")
+	d := m.dialog.(*ruleDialog)
+	d.cursor = slices.Index(d.fields(), fModel)
+	keys(m, "down", "up") // focus the model field
+	typeText(m, "claude-opus-5-5")
+	if !strings.Contains(m.View(), "claude-sonnet-5-5") {
+		t.Fatalf("the model field should suggest model IDs:\n%s", m.View())
+	}
+	keys(m, "ctrl+s")
+	rs := m.cfg.AutoRules["pull_request"]
+	if len(rs) != 1 || rs[0].Model != "claude-opus-5-5" || !strings.Contains(m.View(), "claude-opus-5-5") {
+		t.Fatalf("model not saved or shown: %+v", rs)
+	}
+
+	// Auto-run and manual starts both use the rule's model.
+	m.cfg.Watch("me/app").AutoRun = true
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+	gh.events = []github.Event{ev(2, config.KindPullRequest), ev(3, config.KindPullRequest)}
+	m.cfg.Repo("me/app").AutoRun = false
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+	m.cfg.Repo("me/app").AutoRun = true
+	gh.events = append(gh.events, ev(4, config.KindPullRequest))
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+	if ss := m.mgr.Snapshot(); len(ss) != 1 || ss[0].Model != "claude-opus-5-5" {
+		t.Fatalf("auto-run should use the rule's model: %+v", ss)
+	}
+	keys(m, "1")
+	for i, e := range m.feed {
+		if e.Number == 2 {
+			m.eventCursor = i
+		}
+	}
+	keys(m, "enter")
+	if !strings.Contains(m.View(), "Model: claude-opus-5-5") {
+		t.Fatalf("the start dialog should show the model:\n%s", m.View())
 	}
 }

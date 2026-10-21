@@ -569,8 +569,13 @@ func (m *Model) repoFor(ev github.Event) config.Repo {
 
 // pendingRun is a change waiting for its session to finish a turn.
 type pendingRun struct {
-	text  string
-	allow []config.Action
+	text string
+	opts claude.Options
+}
+
+// options turns the rule governing a session into its options.
+func options(r config.Rule) claude.Options {
+	return claude.Options{Allow: r.Allow, Model: r.Model}
 }
 
 // runChange acts on change c. It resumes the item's last session so Claude
@@ -584,11 +589,11 @@ func (m *Model) runChange(ev github.Event, c github.Change, rule config.Rule) er
 	s, ok := m.sessionFor(ev.Key)
 	switch {
 	case !ok || s.ClaudeID == "":
-		return m.startSessionWithPrompt(ev, text, rule.Allow)
+		return m.startSessionWithPrompt(ev, text, options(rule))
 	case s.Status.Active() || s.Status == claude.StatusQueued:
-		m.pending[s.ID] = pendingRun{text: text, allow: rule.Allow}
+		m.pending[s.ID] = pendingRun{text: text, opts: options(rule)}
 	default:
-		if err := m.mgr.Resume(s.ID, text, rule.Allow); err != nil {
+		if err := m.mgr.Resume(s.ID, text, options(rule)); err != nil {
 			return err
 		}
 		m.refreshSessions()
@@ -613,7 +618,7 @@ func (m *Model) deliverPending() {
 		case s.Status.Active() || s.Status == claude.StatusQueued:
 		default:
 			delete(m.pending, id)
-			if err := m.mgr.Resume(id, p.text, p.allow); err != nil {
+			if err := m.mgr.Resume(id, p.text, p.opts); err != nil {
 				m.setStatus(true, "Could not resume session %d: %v", id, err)
 			}
 		}
@@ -658,8 +663,8 @@ func (m *Model) manualChange(ev github.Event) (github.Change, config.Rule) {
 	return c, rule
 }
 
-func (m *Model) startSessionWithPrompt(ev github.Event, text string, allow []config.Action) error {
-	id := m.mgr.StartPrompt(ev, text, allow)
+func (m *Model) startSessionWithPrompt(ev github.Event, text string, opts claude.Options) error {
+	id := m.mgr.StartPrompt(ev, text, opts)
 	m.st.EventSessions[ev.Key] = id
 	delete(m.fresh, ev.Key)
 	m.dirty = true

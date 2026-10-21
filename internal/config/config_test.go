@@ -84,6 +84,8 @@ func TestLoadValidatesAutoRules(t *testing.T) {
 		`{"auto_rules":{"issue":{"prompt":"{{.Number"}}}`:                                            "prompt:",
 		`{"auto_rules":{"pull_request:checks_failed":{"allow":["update_pr"]},"issue:commented":{}}}`: "",
 		`{"auto_rules":{"issue:checks_failed":{}}}`:                                                  "has no trigger",
+		`{"auto_rules":{"pull_request":{"model":"claude opus"}}}`:                                    "cannot contain spaces",
+		`{"auto_rules":{"pull_request":{"model":"claude-opus-5-5"}}}`:                                "",
 		`{"auto_rules":{"issue":{},"issue:opened":{}}}`:                                              "same key",
 		`{"prompts":{"pull_request:conflict":"{{.Number"}}`:                                          "prompts:",
 	}
@@ -183,5 +185,18 @@ func TestSaveKeepsPromptsReadable(t *testing.T) {
 	b, _ := os.ReadFile(path)
 	if !strings.Contains(string(b), "if a < b && c > d") || !strings.HasSuffix(string(b), "}\n") {
 		t.Fatalf("prompt escaped or file malformed:\n%s", b)
+	}
+}
+
+func TestLoadValidatesEffort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(path, []byte(`{"claude":{"model":"claude-opus-5-5","effort":"medium"}}`), 0o644)
+	cfg, err := Load(path)
+	if err != nil || cfg.Claude.Effort != "medium" {
+		t.Fatalf("got %+v, %v", cfg.Claude, err)
+	}
+	os.WriteFile(path, []byte(`{"claude":{"effort":"extreme"}}`), 0o644)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "must be one of low, medium") {
+		t.Fatalf("got %v", err)
 	}
 }

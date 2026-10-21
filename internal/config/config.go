@@ -15,6 +15,7 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"unicode"
 )
 
 // EventKind identifies a type of GitHub activity Fast Lane can watch.
@@ -239,6 +240,9 @@ type Rule struct {
 	Prompt string `json:"prompt,omitempty"`
 	// Allow lists actions Claude may take without asking.
 	Allow []Action `json:"allow,omitempty"`
+	// Model replaces Claude.Model for sessions this rule governs, such as
+	// claude-opus-5-5 or an alias like sonnet.
+	Model string `json:"model,omitempty"`
 }
 
 // Rules are the rules for one key, tried in order; the first that accepts an
@@ -347,6 +351,9 @@ func (r Rule) validate(key RuleKey, kind EventKind) error {
 	case r.SkipDrafts && kind != KindPullRequest:
 		return fmt.Errorf("%s: skip_drafts only applies to pull requests", k)
 	}
+	if strings.ContainsFunc(r.Model, unicode.IsSpace) {
+		return fmt.Errorf("%s: model %q cannot contain spaces", k, r.Model)
+	}
 	for _, a := range r.Allow {
 		if _, ok := actionInfo[a]; !ok {
 			return fmt.Errorf("%s: unknown action %q in allow", k, a)
@@ -391,6 +398,8 @@ type Claude struct {
 	Path string `json:"path"`
 	// Model is passed to --model when set.
 	Model string `json:"model,omitempty"`
+	// Effort is passed to --effort when set: one of Efforts.
+	Effort string `json:"effort,omitempty"`
 	// PermissionMode is passed to --permission-mode. Prompts that the mode
 	// does not settle on its own are shown in the TUI.
 	PermissionMode string `json:"permission_mode"`
@@ -401,6 +410,9 @@ type Claude struct {
 	// ExtraArgs are appended to every claude invocation.
 	ExtraArgs []string `json:"extra_args,omitempty"`
 }
+
+// Efforts lists the effort levels claude --effort accepts, lowest first.
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
 
 // Config is the full user configuration.
 type Config struct {
@@ -495,6 +507,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.MaxAutoRuns < 1 {
 		cfg.MaxAutoRuns = 1
+	}
+	if e := cfg.Claude.Effort; e != "" && !slices.Contains(Efforts, e) {
+		return nil, fmt.Errorf("%s: claude.effort %q must be one of %s", path, e, strings.Join(Efforts, ", "))
 	}
 	if cfg.MaxConcurrent < 1 {
 		cfg.MaxConcurrent = 1

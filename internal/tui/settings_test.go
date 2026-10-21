@@ -76,6 +76,11 @@ func TestSettingsCyclesAndLists(t *testing.T) {
 	if m.cfg.Claude.PermissionMode != "acceptEdits" {
 		t.Fatalf("enter should cycle the mode: %q", m.cfg.Claude.PermissionMode)
 	}
+	m.setCursor = settingIndex(t, "Effort")
+	keys(m, "enter", "enter")
+	if m.cfg.Claude.Effort != "medium" || !strings.Contains(m.View(), "medium") {
+		t.Fatalf("enter should cycle the effort: %q", m.cfg.Claude.Effort)
+	}
 	m.setCursor = settingIndex(t, "Inbox")
 	keys(m, "enter")
 	if !m.cfg.Inbox.Enabled || m.cfg.Inbox.AutoRun {

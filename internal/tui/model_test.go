@@ -347,7 +347,7 @@ func TestBusySessionGetsChangeAfterItsTurn(t *testing.T) {
 	m.mgr.Restore([]*claude.Session{{ID: 9, Event: pr, Status: claude.StatusIdle, ClaudeID: "c-9"}})
 	m.refreshSessions()
 	m.sessions[0].Status = claude.StatusRunning
-	m.pending[9] = pendingRun{text: "CI failed again", allow: []config.Action{config.ActionUpdatePR}}
+	m.pending[9] = pendingRun{text: "CI failed again", opts: claude.Options{Allow: []config.Action{config.ActionUpdatePR}}}
 	m.deliverPending()
 	if _, waiting := m.pending[9]; !waiting {
 		t.Fatal("a running session should keep its pending change")

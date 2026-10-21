@@ -56,6 +56,8 @@ type Session struct {
 	Lines    []Line       `json:"lines,omitempty"`
 	// Allow lists the actions Claude may take without asking.
 	Allow []config.Action `json:"allow,omitempty"`
+	// Model overrides the configured model when set.
+	Model string `json:"model,omitempty"`
 	// Dir is where Claude runs, set when the session first starts. When
 	// Checkout is set, Dir is a git worktree of that local checkout, made
 	// from its Remote.
@@ -223,15 +225,24 @@ func (m *Manager) Start(ev github.Event) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return m.StartPrompt(ev, text, nil), nil
+	return m.StartPrompt(ev, text, Options{}), nil
 }
 
-// StartPrompt queues a new session for ev with custom instructions and the
-// actions Claude may take without asking, and returns its ID.
-func (m *Manager) StartPrompt(ev github.Event, text string, allow []config.Action) int {
+// Options shape a session: what Claude may do without asking and which
+// model it runs.
+type Options struct {
+	Allow []config.Action
+	// Model overrides the configured model when set.
+	Model string
+}
+
+// StartPrompt queues a new session for ev with custom instructions and
+// returns its ID.
+func (m *Manager) StartPrompt(ev github.Event, text string, o Options) int {
 	m.mu.Lock()
 	now := time.Now()
-	s := &Session{ID: m.nextID, Event: ev, Status: StatusQueued, Started: now, Updated: now, Allow: allow, nextInput: text}
+	s := &Session{ID: m.nextID, Event: ev, Status: StatusQueued, Started: now, Updated: now,
+		Allow: o.Allow, Model: o.Model, nextInput: text}
 	m.nextID++
 	m.sessions = append(m.sessions, s)
 	m.queue = append(m.queue, s.ID)
@@ -243,16 +254,16 @@ func (m *Manager) StartPrompt(ev github.Event, text string, allow []config.Actio
 
 // Reply sends text to a finished session, resuming the conversation.
 func (m *Manager) Reply(id int, text string) error {
-	return m.resume(id, text, nil, false)
+	return m.resume(id, text, nil)
 }
 
-// Resume is Reply for a trigger: it also replaces the actions Claude may
-// take without asking.
-func (m *Manager) Resume(id int, text string, allow []config.Action) error {
-	return m.resume(id, text, allow, true)
+// Resume is Reply for a trigger: it also replaces the session's options
+// with the trigger rule's.
+func (m *Manager) Resume(id int, text string, o Options) error {
+	return m.resume(id, text, &o)
 }
 
-func (m *Manager) resume(id int, text string, allow []config.Action, setAllow bool) error {
+func (m *Manager) resume(id int, text string, o *Options) error {
 	m.mu.Lock()
 	s := m.find(id)
 	switch {
@@ -267,8 +278,8 @@ func (m *Manager) resume(id int, text string, allow []config.Action, setAllow bo
 		return errors.New("session never started, so there is nothing to resume")
 	}
 	s.nextInput = text
-	if setAllow {
-		s.Allow = allow
+	if o != nil {
+		s.Allow, s.Model = o.Allow, o.Model
 	}
 	s.Status = StatusQueued
 	s.Err = ""
@@ -494,7 +505,7 @@ func (m *Manager) execute(id int, p *proc, input string) {
 
 	m.mu.Lock()
 	s := m.find(id)
-	repo, number, resume, allow := s.Event.Repo, s.Event.Number, s.ClaudeID, s.Allow
+	repo, number, resume, allow, model := s.Event.Repo, s.Event.Number, s.ClaudeID, s.Allow, s.Model
 	dir, checkout, remote := s.Dir, s.Checkout, s.Remote
 	cfg := m.cfg
 	m.mu.Unlock()
@@ -512,7 +523,11 @@ func (m *Manager) execute(id int, p *proc, input string) {
 		return
 	}
 
-	err = m.runClaude(id, p, cfg.Claude, dir, repo, number, resume, allow, checkout != "", input)
+	c := cfg.Claude
+	if model != "" {
+		c.Model = model
+	}
+	err = m.runClaude(id, p, c, dir, repo, number, resume, allow, checkout != "", input)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s = m.find(id)
@@ -679,6 +694,9 @@ func (m *Manager) claudeArgs(c config.Claude, repo string, number int, resume st
 	}
 	if c.Model != "" {
 		args = append(args, "--model", c.Model)
+	}
+	if c.Effort != "" {
+		args = append(args, "--effort", c.Effort)
 	}
 	if c.MaxBudgetUSD > 0 {
 		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", c.MaxBudgetUSD))

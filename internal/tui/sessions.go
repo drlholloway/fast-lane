@@ -208,8 +208,12 @@ func (m *Model) sessionsView(h int) string {
 	if started != "now" {
 		started += " ago"
 	}
-	sub := sMuted.Render(fit(fmt.Sprintf("%s · %s #%d · started %s · %s", s.Event.Repo, s.Event.Kind.Short(),
-		s.Event.Number, started, m.sessionDir(s)), m.transcript.Width))
+	model := ""
+	if s.Model != "" {
+		model = " · " + s.Model
+	}
+	sub := sMuted.Render(fit(fmt.Sprintf("%s · %s #%d · started %s%s · %s", s.Event.Repo, s.Event.Kind.Short(),
+		s.Event.Number, started, model, m.sessionDir(s)), m.transcript.Width))
 	right := head + "\n" + sub + "\n" + m.transcript.View()
 
 	if narrow {

@@ -242,9 +242,10 @@ func (m *Model) rulesView(h int) string {
 		wPrompt = 7
 	)
 	wAllow := clamp(m.width/4, 12, 34)
-	wFilter := m.width - wKey - wNum - wAllow - wPrompt - 6
+	wModel := clamp(m.width/7, 8, 17) // fits claude-sonnet-5-5 at 120 columns
+	wFilter := m.width - wKey - wNum - wAllow - wModel - wPrompt - 7
 	b.WriteString(sMuted.Render(fit("  "+fit("KEY", wKey)+" "+fit("#", wNum)+" "+fit("FILTERS", wFilter)+" "+
-		fit("ALLOW", wAllow)+" PROMPT", m.width)) + "\n")
+		fit("ALLOW", wAllow)+" "+fit("MODEL", wModel)+" PROMPT", m.width)) + "\n")
 	h--
 	m.ruleCursor = clamp(m.ruleCursor, 0, len(rows)-1)
 	start := window(m.ruleCursor, h, len(rows))
@@ -262,8 +263,12 @@ func (m *Model) rulesView(h int) string {
 		if r.rule.Prompt != "" {
 			pr = sWarn.Render("custom")
 		}
+		model := sMuted.Render(fit("default", wModel))
+		if r.rule.Model != "" {
+			model = fit(r.rule.Model, wModel)
+		}
 		row := "  " + fit(string(r.key), wKey) + " " + fit(fmt.Sprint(r.idx+1), wNum) + " " +
-			fit(ruleSummary(r.rule), wFilter) + " " + fit(allow, wAllow) + " " + pr
+			fit(ruleSummary(r.rule), wFilter) + " " + fit(allow, wAllow) + " " + model + " " + pr
 		if m.inherited(scope) {
 			row = sMuted.Render(ansi.Strip(row))
 		}
@@ -317,8 +322,12 @@ const (
 	fSkipDrafts
 	fSkipBots
 	fAllow
+	fModel
 	fPrompt
 )
+
+// modelHint suggests what the Model field takes.
+const modelHint = "a model ID such as claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5 or claude-fable-5-1, or an alias such as opus"
 
 var severities = []string{"", "low", "medium", "high", "critical"}
 
@@ -359,6 +368,14 @@ func newRuleDialog(m *Model, scope string, key config.RuleKey, idx int, r config
 		ti.SetValue(strings.Join(v, ", "))
 		d.inputs[f] = &ti
 	}
+	mi := textinput.New()
+	mi.Prompt = ""
+	mi.Placeholder = "default"
+	if def := m.cfg.Claude.Model; def != "" {
+		mi.Placeholder = "default (" + def + ")"
+	}
+	mi.SetValue(r.Model)
+	d.inputs[fModel] = &mi
 	return d
 }
 
@@ -378,7 +395,7 @@ func (d *ruleDialog) fields() []ruleField {
 	if d.kind == config.KindPullRequest {
 		fs = append(fs, fSkipDrafts)
 	}
-	return append(fs, fSkipBots, fAllow, fPrompt)
+	return append(fs, fSkipBots, fAllow, fModel, fPrompt)
 }
 
 func (d *ruleDialog) field() ruleField {
@@ -531,6 +548,7 @@ func (d *ruleDialog) rule() config.Rule {
 		SkipAuthors: text(fSkipAuthors),
 		SkipBots:    d.skipBots,
 		Prompt:      d.prompt,
+		Model:       strings.TrimSpace(d.inputs[fModel].Value()),
 	}
 	if slices.Contains(shown, fSeverity) {
 		r.MinSeverity = d.severity
@@ -623,6 +641,11 @@ func (d *ruleDialog) view(m *Model) string {
 			label, val = "Skip bots", checkbox(d.skipBots)
 		case fAllow:
 			label, val = "Allow", d.allowView(f == cur, d.width-6-wl-2)
+		case fModel:
+			label, val = "Model", d.inputs[f].View()
+			if f == cur {
+				val += "\n" + sMuted.Render(wrapLimit(modelHint, d.width-6-wl-2, 2))
+			}
 		case fPrompt:
 			label = "Prompt"
 			if d.prompt == "" {

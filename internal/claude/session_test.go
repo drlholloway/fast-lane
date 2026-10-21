@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -191,6 +192,17 @@ func TestClaudeArgsAddAllowedActions(t *testing.T) {
 	if strings.Count(strings.Join(allow, "\n"), "Bash(git push:*)") != 1 {
 		t.Fatalf("duplicate tool rules: %v", allow)
 	}
+	for _, a := range args {
+		if a == "--effort" {
+			t.Fatal("no --effort without an effort setting")
+		}
+	}
+	c := m.cfg.Claude
+	c.Effort = "medium"
+	withEffort, _ := m.claudeArgs(c, "o/r", 3, "", nil, false)
+	if i := slices.Index(withEffort, "--effort"); i < 0 || withEffort[i+1] != "medium" {
+		t.Fatalf("effort should be passed on: %v", withEffort)
+	}
 	if !strings.Contains(flag("--append-system-prompt"), "You may push new branches, open pull requests, update existing pull requests") {
 		t.Fatal("system prompt should list the allowed actions")
 	}
@@ -372,5 +384,60 @@ func TestOldSessionsResumeWhereTheyStarted(t *testing.T) {
 	m.assignDir(s)
 	if s.Dir != cfg.CloneDir("o/r") || s.Checkout != "" {
 		t.Fatalf("a session from before worktrees must resume in its old directory: %+v", s)
+	}
+}
+
+func modelArg(call []string) string {
+	for i, a := range call {
+		if a == "--model" && i+1 < len(call) {
+			return call[i+1]
+		}
+	}
+	return ""
+}
+
+func lastClaudeCall(calls [][]string) []string {
+	callsMu.Lock()
+	defer callsMu.Unlock()
+	for i := len(calls) - 1; i >= 0; i-- {
+		if calls[i][0] == "claude" {
+			return calls[i]
+		}
+	}
+	return nil
+}
+
+func TestSessionModel(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkspaceDir = t.TempDir()
+	cfg.Claude.Model = "claude-sonnet-5-5"
+	os.MkdirAll(filepath.Join(cfg.CloneDir("o/r"), ".git"), 0o755)
+	var calls [][]string
+	m := NewManager(cfg, "")
+	m.SetRunner(fakeRunner(t, &calls))
+	defer m.Shutdown()
+
+	id := m.StartPrompt(github.Event{Repo: "o/r", Kind: config.KindIssue, Number: 1}, "go", Options{Model: "claude-haiku-5-5"})
+	s := waitFor(t, m, id, func(s Session) bool { return len(s.Pending) == 1 })
+	if got := modelArg(lastClaudeCall(calls)); got != "claude-haiku-5-5" || s.Model != "claude-haiku-5-5" {
+		t.Fatalf("the session's model should replace the default: %q", got)
+	}
+	m.Respond(s.Pending[0], Answer{Allow: true})
+	waitFor(t, m, id, func(s Session) bool { return s.Status == StatusIdle })
+
+	// A plain reply keeps the session's model.
+	m.Reply(id, "more")
+	s = waitFor(t, m, id, func(s Session) bool { return len(s.Pending) == 1 })
+	if got := modelArg(lastClaudeCall(calls)); got != "claude-haiku-5-5" {
+		t.Fatalf("a reply should keep the model: %q", got)
+	}
+	m.Respond(s.Pending[0], Answer{Allow: true})
+	waitFor(t, m, id, func(s Session) bool { return s.Status == StatusIdle })
+
+	// A trigger whose rule sets no model falls back to the default.
+	m.Resume(id, "ci failed", Options{})
+	waitFor(t, m, id, func(s Session) bool { return len(s.Pending) == 1 })
+	if got := modelArg(lastClaudeCall(calls)); got != "claude-sonnet-5-5" {
+		t.Fatalf("resuming under a rule without a model should use the default: %q", got)
 	}
 }
