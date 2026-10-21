@@ -43,9 +43,8 @@ func run() error {
 	if _, err := exec.LookPath("gh"); err != nil {
 		return fmt.Errorf("the GitHub CLI (gh) is required: https://cli.github.com")
 	}
-	if _, err := exec.LookPath(cfg.Claude.Path); err != nil {
-		return fmt.Errorf("Claude Code (%s) was not found on PATH: https://claude.com/claude-code", cfg.Claude.Path)
-	}
+	// A missing claude is reported on the Settings tab, where its path can be
+	// fixed, rather than stopping Fast Lane from starting.
 	gh, err := github.NewREST()
 	if err != nil {
 		return err

@@ -116,18 +116,7 @@ func (m *Model) rulesKey(msg tea.KeyMsg) tea.Cmd {
 		m.ruleScope, m.ruleCursor = scopes[(i+1)%len(scopes)], 0
 		return nil
 	case "i":
-		in := &m.cfg.Inbox
-		switch {
-		case in.Enabled && in.AutoRun:
-			in.AutoRun = false
-			return m.saveConfig("Inbox: listing review requests, mentions and assignments without running Claude")
-		case in.Enabled:
-			in.Enabled = false
-			return m.saveConfig("Inbox: off")
-		default:
-			in.Enabled, in.AutoRun = true, true
-			return m.saveConfig("Inbox: on, running Claude on review requests, mentions and assignments")
-		}
+		return tea.Batch(m.cycleInbox(), m.runChecks())
 	case "a":
 		if scope == "" {
 			m.setStatus(false, "Auto-run is set per repo; switch scope with [ or ]")
@@ -206,12 +195,9 @@ func (m *Model) rulesView(h int) string {
 	b.WriteString(sMuted.Render("scope ") + sTabOn.Render(name) +
 		sMuted.Render(fmt.Sprintf("  %d/%d · [ ] to switch", slices.Index(scopes, scope)+1, len(scopes))) + "\n")
 
-	in := "off"
-	switch {
-	case m.cfg.Inbox.Enabled && m.cfg.Inbox.AutoRun:
-		in = sGood.Render("on, auto-run")
-	case m.cfg.Inbox.Enabled:
-		in = "on, list only"
+	in := inboxLabel(m.cfg.Inbox)
+	if m.cfg.Inbox.Enabled && m.cfg.Inbox.AutoRun {
+		in = sGood.Render(in)
 	}
 	line := sMuted.Render("inbox ") + in + sMuted.Render(" (i)")
 	if scope != "" {

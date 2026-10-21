@@ -154,7 +154,7 @@ func TestSessionPermissionRoundTrip(t *testing.T) {
 func TestClaudeArgsAddAllowedActions(t *testing.T) {
 	m := NewManager(config.Default(), "")
 	defer m.Shutdown()
-	args, err := m.claudeArgs("o/r", 3, "", []config.Action{config.ActionPushBranch, config.ActionOpenPR, config.ActionUpdatePR, config.ActionDismissAlert, config.ActionComment}, false)
+	args, err := m.claudeArgs(m.cfg.Claude, "o/r", 3, "", []config.Action{config.ActionPushBranch, config.ActionOpenPR, config.ActionUpdatePR, config.ActionDismissAlert, config.ActionComment}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

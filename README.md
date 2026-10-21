@@ -23,9 +23,33 @@ go install github.com/drlholloway/fast-lane@latest
 go build -o fast-lane . && ./fast-lane
 ```
 
+## Getting started
+
+1. **Start it.** Run `./fast-lane`, or `fast-lane` if you used `go install`. You need the GitHub CLI logged in (`gh auth login`), and Fast Lane uses it and Claude Code as they are, with no keys or tokens of its own. It loads your repos from GitHub and scans your code folders for local checkouts.
+
+2. **Check your setup.** Press `5` for the Settings tab. Its Prerequisites section checks the GitHub CLI and your login's scopes, access to your notifications, Claude Code, git, the workspace and your code folders, and says how to fix anything that's off. If something needs attention at startup, the status line tells you. Below the checks you can change every setting, including Code folders if you keep code somewhere other than the [usual places](#local-checkouts).
+
+3. **Watch a repo.** Press `3` for the Repos tab, `/` to search, and `space` to watch one. `e` picks which kinds of activity to watch. Its open PRs, issues and alerts show up on the Events tab (`1`). This first poll only records what's already open, so nothing older than now ever runs on its own.
+
+4. **Run Claude by hand once.** On the Events tab, pick an item and press `enter`. You'll see the instructions Claude will get, and you can edit them before pressing `ctrl+s`. Follow along on the Sessions tab (`2`). When Claude wants to do something that isn't pre-approved, or asks a question, a dialog pops up: `y` allows, `n` denies, `a` allows that kind of action for the rest of the session. When it's done, press `enter` on the session to reply and keep going.
+
+5. **Turn on automation for a repo.** On the Repos tab, `a` toggles auto-run. With no rules, every newly opened item on that repo starts a session by itself. To be choosier, open the Rules tab (`4`) and press `n`. For example, to have Claude fix CI on your own PRs:
+   - set the kind to `pull_request` and the trigger to `checks_failed`
+   - put your login under Authors
+   - check `edit` and `update_pr` under Allow
+   - press `ctrl+s`
+
+   Once any rule exists, only what the rules list auto-runs. See [Triggers](#triggers) for everything Fast Lane can react to, and the `auto_rules` [configuration](#configuration) for every filter and action.
+
+6. **Let your inbox come to you.** Review requests, @-mentions and assignments on any repo are picked up from your GitHub notifications and handled by default. Claude prepares the review or reply, then asks before posting it. `i` on the Rules tab switches this between running Claude, only listing them, and off. See [Inbox](#inbox).
+
+7. **Leave it running.** Fast Lane polls every two minutes and rings the terminal bell when something needs you. What it has seen and the session history are saved, so you can quit with `q` and pick up later. Sessions that were mid-turn when you quit are marked interrupted, and you can resume them with a reply.
+
+Claude starts out cautious. It can read code and GitHub freely, but it asks before editing files, pushing, commenting, reviewing, merging or anything else that changes something, until a rule's `allow` list says otherwise. It always works in its own git worktree or clone, never in your checkout. See [Safety defaults](#safety-defaults).
+
 ## Using it
 
-The screen has four tabs. Switch between them with `1`–`4` or `tab`.
+The screen has five tabs. Switch between them with `1`–`5` or `tab`.
 
 | Tab | What it shows | Keys |
 | --- | --- | --- |
@@ -33,6 +57,7 @@ The screen has four tabs. Switch between them with `1`–`4` or `tab`.
 | **Sessions** | Every Claude session and its live transcript, with status and cost. | `enter` reply to a finished session or answer a pending prompt · `x` stop · `D` delete a finished session and its worktree · `pgup`/`pgdn` scroll · `f` follow |
 | **Repos** | Your repos, starred repos and repos where you have open PRs. | `space` watch/unwatch · `a` toggle auto-run · `e` choose event kinds and local checkout · `r` edit its rules · `f` cycle filter · `/` search |
 | **Rules** | The [auto rules](#configuration) for the global scope or one watched repo, in the order they're tried, plus the inbox and the repo's auto-run setting. Changes are saved to the config file and apply from the next poll. | `[`/`]` switch scope · `n` new rule · `enter` edit · `d` delete · `J`/`K` reorder · `c` copy the global rules into this repo · `a` toggle the repo's auto-run · `i` cycle the inbox (auto-run, list only, off) |
+| **Settings** | Prerequisite checks with fixes, then every top-level setting: polling, concurrency, the workspace, code folders, Claude Code's path, model, permission mode, budget, allowed tools and extra arguments, the inbox, and the default prompt for each kind and trigger. | `enter` edit or cycle the selected setting · `c` run the checks again |
 
 `R` refreshes everything, `?` shows more help, and `q` quits.
 
@@ -95,7 +120,7 @@ Each session runs in its own worktree under `<workspace_dir>/.worktrees/`. It's 
 
 ## Configuration
 
-Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and are written for you as you use the Repos and Rules tabs. Edits you make to the file by hand take effect when Fast Lane restarts. Use `-config <path>` to choose another file.
+Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and are written for you as you use the Repos, Rules and Settings tabs. Edits you make to the file by hand take effect when Fast Lane restarts. Use `-config <path>` to choose another file.
 
 ```json
 {
@@ -193,6 +218,7 @@ go test -race ./...
 | `internal/claude` | Session manager: spawns `claude`, parses stream-json and answers `can_use_tool` control requests |
 | `internal/tui` | Bubble Tea interface |
 | `internal/local` | Finds local checkouts of GitHub repos in `code_dirs` |
+| `internal/doctor` | Prerequisite checks shown on the Settings tab |
 | `internal/config`, `internal/state`, `internal/prompt` | Settings, persistence and prompt templates |
 
 ## License

@@ -12,6 +12,7 @@ import (
 
 	"github.com/drlholloway/fast-lane/internal/claude"
 	"github.com/drlholloway/fast-lane/internal/config"
+	"github.com/drlholloway/fast-lane/internal/doctor"
 	"github.com/drlholloway/fast-lane/internal/github"
 	"github.com/drlholloway/fast-lane/internal/state"
 )
@@ -23,6 +24,9 @@ type fakeGH struct {
 }
 
 func (f *fakeGH) CurrentUser(context.Context) (string, error) { return "me", nil }
+func (f *fakeGH) Auth(context.Context) (github.Auth, error) {
+	return github.Auth{Login: "me", Scopes: []string{"repo", "read:org"}, ScopesKnown: true}, nil
+}
 func (f *fakeGH) ListRepos(context.Context) ([]github.Repo, error) {
 	return []github.Repo{{FullName: "me/app", Description: "the app"}, {FullName: "org/lib"}}, nil
 }
@@ -63,6 +67,9 @@ func newTestModel(t *testing.T) (*Model, *fakeGH) {
 	gh := &fakeGH{}
 	m := New(cfg, st, gh, mgr)
 	m.Browse = func(string) error { return nil }
+	m.Check = func(context.Context, doctor.Env) []doctor.Check {
+		return []doctor.Check{{Name: "GitHub CLI", Detail: "gh version 2"}}
+	}
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	return m, gh
 }

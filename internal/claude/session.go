@@ -113,7 +113,9 @@ func defaultRunner(ctx context.Context, dir, name string, args ...string) *exec.
 
 // Manager owns all sessions and schedules them within the concurrency limit.
 type Manager struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+	// cfg is the manager's own copy, replaced whole by SetConfig and never
+	// changed in place, so a session can keep using the one it started with.
 	cfg      *config.Config
 	sessions []*Session
 	procs    map[int]*proc
@@ -134,7 +136,7 @@ type Manager struct {
 func NewManager(cfg *config.Config, logDir string) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
-		cfg:     cfg,
+		cfg:     cfg.Clone(),
 		procs:   map[int]*proc{},
 		nextID:  1,
 		updates: make(chan Update, 256),
@@ -214,7 +216,10 @@ func (m *Manager) ActiveCount() int {
 
 // Start queues a new session for ev using its rendered prompt template.
 func (m *Manager) Start(ev github.Event) (int, error) {
-	text, err := prompt.Render(m.cfg, ev, github.Opened(ev), "")
+	m.mu.Lock()
+	cfg := m.cfg
+	m.mu.Unlock()
+	text, err := prompt.Render(cfg, ev, github.Opened(ev), "")
 	if err != nil {
 		return 0, err
 	}
@@ -381,6 +386,15 @@ func (m *Manager) dirBusy(dir string) bool {
 	return false
 }
 
+// SetConfig makes later work use a copy of cfg. Turns already running keep
+// the settings they started with.
+func (m *Manager) SetConfig(cfg *config.Config) {
+	c := cfg.Clone()
+	m.mu.Lock()
+	m.cfg = c
+	m.mu.Unlock()
+}
+
 // SetCheckouts tells the manager where repositories are checked out on this
 // machine, keyed by lower-case "owner/name".
 func (m *Manager) SetCheckouts(c map[string]local.Checkout) {
@@ -482,6 +496,7 @@ func (m *Manager) execute(id int, p *proc, input string) {
 	s := m.find(id)
 	repo, number, resume, allow := s.Event.Repo, s.Event.Number, s.ClaudeID, s.Allow
 	dir, checkout, remote := s.Dir, s.Checkout, s.Remote
+	cfg := m.cfg
 	m.mu.Unlock()
 
 	var err error
@@ -497,7 +512,7 @@ func (m *Manager) execute(id int, p *proc, input string) {
 		return
 	}
 
-	err = m.runClaude(id, p, dir, repo, number, resume, allow, checkout != "", input)
+	err = m.runClaude(id, p, cfg.Claude, dir, repo, number, resume, allow, checkout != "", input)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s = m.find(id)
@@ -650,8 +665,7 @@ func (m *Manager) prepareWorkdir(id int, repo, dir string) error {
 	return nil
 }
 
-func (m *Manager) claudeArgs(repo string, number int, resume string, allow []config.Action, worktree bool) ([]string, error) {
-	c := m.cfg.Claude
+func (m *Manager) claudeArgs(c config.Claude, repo string, number int, resume string, allow []config.Action, worktree bool) ([]string, error) {
 	args := []string{
 		"-p",
 		"--input-format", "stream-json",
@@ -692,12 +706,12 @@ func (m *Manager) claudeArgs(repo string, number int, resume string, allow []con
 	return append(args, c.ExtraArgs...), nil
 }
 
-func (m *Manager) runClaude(id int, p *proc, dir, repo string, number int, resume string, allow []config.Action, worktree bool, input string) error {
-	args, err := m.claudeArgs(repo, number, resume, allow, worktree)
+func (m *Manager) runClaude(id int, p *proc, c config.Claude, dir, repo string, number int, resume string, allow []config.Action, worktree bool, input string) error {
+	args, err := m.claudeArgs(c, repo, number, resume, allow, worktree)
 	if err != nil {
 		return err
 	}
-	cmd := m.run(m.ctx, dir, m.cfg.Claude.Path, args...)
+	cmd := m.run(m.ctx, dir, c.Path, args...)
 	var stderr tailBuffer
 	cmd.Stderr = &stderr
 	stdin, err := cmd.StdinPipe()
@@ -717,7 +731,7 @@ func (m *Manager) runClaude(id int, p *proc, dir, repo string, number int, resum
 	err = cmd.Start()
 	p.mu.Unlock()
 	if err != nil {
-		return fmt.Errorf("start %s: %w", m.cfg.Claude.Path, err)
+		return fmt.Errorf("start %s: %w", c.Path, err)
 	}
 	m.setStatus(id, StatusRunning, nil)
 

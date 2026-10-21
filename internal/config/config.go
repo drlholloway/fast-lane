@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -170,10 +171,16 @@ func ValidateRule(key RuleKey, r Rule) error {
 }
 
 func checkPrompt(key RuleKey, _ EventKind, src string) error {
-	if _, err := template.New(string(key)).Parse(src); err != nil {
+	if err := ValidatePrompt(src); err != nil {
 		return fmt.Errorf("%s: %w", key, err)
 	}
 	return nil
+}
+
+// ValidatePrompt checks that src parses as a prompt template.
+func ValidatePrompt(src string) error {
+	_, err := template.New("prompt").Parse(src)
+	return err
 }
 
 // Duration is a time.Duration that marshals as a human-readable string ("2m").
@@ -472,7 +479,7 @@ func Load(path string) (*Config, error) {
 	if err := json.Unmarshal(b, cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	cfg.WorkspaceDir = expandHome(cfg.WorkspaceDir)
+	cfg.WorkspaceDir = ExpandHome(cfg.WorkspaceDir)
 	if cfg.Prompts, err = canonical(cfg.Prompts, checkPrompt); err != nil {
 		return nil, fmt.Errorf("%s: prompts: %w", path, err)
 	}
@@ -481,7 +488,7 @@ func Load(path string) (*Config, error) {
 	}
 	for i := range cfg.Repos {
 		r := &cfg.Repos[i]
-		r.LocalPath = expandHome(r.LocalPath)
+		r.LocalPath = ExpandHome(r.LocalPath)
 		if r.AutoRules, err = canonical(r.AutoRules, checkRules); err != nil {
 			return nil, fmt.Errorf("%s: %s auto_rules: %w", path, r.FullName, err)
 		}
@@ -568,11 +575,39 @@ func (c *Config) RulesFor(r Repo) map[RuleKey]Rules {
 	return nil
 }
 
+// Clone returns a deep copy of c that shares nothing it could mutate.
+func (c *Config) Clone() *Config {
+	out := *c
+	out.Claude.AllowedTools = slices.Clone(c.Claude.AllowedTools)
+	out.Claude.ExtraArgs = slices.Clone(c.Claude.ExtraArgs)
+	out.CodeDirs = slices.Clone(c.CodeDirs)
+	out.Prompts = maps.Clone(c.Prompts)
+	out.AutoRules = cloneRules(c.AutoRules)
+	out.Repos = make([]Repo, len(c.Repos))
+	for i, r := range c.Repos {
+		r.Events = slices.Clone(r.Events)
+		r.AutoRules = cloneRules(r.AutoRules)
+		out.Repos[i] = r
+	}
+	return &out
+}
+
+func cloneRules(m map[RuleKey]Rules) map[RuleKey]Rules {
+	if m == nil {
+		return nil
+	}
+	out := make(map[RuleKey]Rules, len(m))
+	for k, rs := range m {
+		out[k] = slices.Clone(rs)
+	}
+	return out
+}
+
 // SearchDirs returns CodeDirs with ~ expanded.
 func (c *Config) SearchDirs() []string {
 	out := make([]string, len(c.CodeDirs))
 	for i, d := range c.CodeDirs {
-		out[i] = expandHome(d)
+		out[i] = ExpandHome(d)
 	}
 	return out
 }
@@ -617,7 +652,8 @@ func home() string {
 	return h
 }
 
-func expandHome(p string) string {
+// ExpandHome replaces a leading ~ with the user's home directory.
+func ExpandHome(p string) string {
 	if p == "~" {
 		return home()
 	}

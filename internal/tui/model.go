@@ -20,6 +20,7 @@ import (
 	"github.com/drlholloway/fast-lane/internal/auto"
 	"github.com/drlholloway/fast-lane/internal/claude"
 	"github.com/drlholloway/fast-lane/internal/config"
+	"github.com/drlholloway/fast-lane/internal/doctor"
 	"github.com/drlholloway/fast-lane/internal/github"
 	"github.com/drlholloway/fast-lane/internal/local"
 	"github.com/drlholloway/fast-lane/internal/prompt"
@@ -33,9 +34,10 @@ const (
 	tabSessions
 	tabRepos
 	tabRules
+	tabSettings
 )
 
-var tabNames = []string{"Events", "Sessions", "Repos", "Rules"}
+var tabNames = []string{"Events", "Sessions", "Repos", "Rules", "Settings"}
 
 type (
 	loadedMsg struct {
@@ -74,6 +76,8 @@ type Model struct {
 	mgr *claude.Manager
 	// Browse opens a URL; swapped out in tests.
 	Browse func(url string) error
+	// Check runs the prerequisite checks; swapped out in tests.
+	Check func(context.Context, doctor.Env) []doctor.Check
 
 	width, height int
 	tab           tab
@@ -104,6 +108,11 @@ type Model struct {
 	lastPoll    time.Time
 	nextPoll    time.Time
 	pollErrs    map[string]string
+
+	// Settings tab.
+	checks    []doctor.Check
+	checking  bool
+	setCursor int
 
 	// Rules tab: the scope is "" for the global rules or a watched repo.
 	ruleScope  string
@@ -138,6 +147,7 @@ func New(cfg *config.Config, st *state.State, gh github.Client, mgr *claude.Mana
 		gh:       gh,
 		mgr:      mgr,
 		Browse:   openURL,
+		Check:    doctor.Run,
 		loading:  true,
 		spinner:  sp,
 		filter:   fi,
@@ -157,7 +167,7 @@ func openURL(url string) error {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.load(), m.waitSession(), refreshTick(), m.pollAll(), m.pruneWorktrees())
+	return tea.Batch(m.spinner.Tick, m.load(), m.waitSession(), refreshTick(), m.pollAll(), m.pruneWorktrees(), m.runChecks())
 }
 
 // worktreeMaxAge is how long a finished session keeps its worktree.
@@ -327,6 +337,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.status != "" && !m.statusErr && time.Since(m.statusAt) > 8*time.Second {
 			m.status = ""
 		}
+
+	case checksMsg:
+		m.onChecks(msg)
 
 	case prunedMsg:
 		switch {
@@ -743,6 +756,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case "4":
 		m.tab = tabRules
 		return nil
+	case "5":
+		m.tab = tabSettings
+		return nil
 	case "R":
 		m.setStatus(false, "Refreshing…")
 		return tea.Batch(m.pollAll(), m.load())
@@ -756,6 +772,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.reposKey(msg)
 	case tabRules:
 		return m.rulesKey(msg)
+	case tabSettings:
+		return m.settingsKey(msg)
 	}
 	return nil
 }
@@ -819,6 +837,8 @@ func (m *Model) View() string {
 			body = m.reposView(bodyH)
 		case tabRules:
 			body = m.rulesView(bodyH)
+		case tabSettings:
+			body = m.settingsView(bodyH)
 		}
 	}
 	body = lipgloss.NewStyle().Height(bodyH).MaxHeight(bodyH).Render(body)
@@ -887,11 +907,13 @@ func (m *Model) footerView() string {
 		help = helpLine("enter", "reply/answer", "x", "stop", "D", "delete", "o", "open", "pgup/pgdn", "scroll", "?", "help", "q", "quit")
 	case m.tab == tabRepos:
 		help = helpLine("space", "watch", "a", "auto-run", "e", "events", "r", "rules", "f", "source", "/", "filter", "?", "help", "q", "quit")
+	case m.tab == tabSettings:
+		help = helpLine("↑/↓", "move", "enter", "edit", "c", "check again", "?", "help", "q", "quit")
 	case m.tab == tabRules:
 		help = helpLine("[/]", "scope", "n", "new", "enter", "edit", "d", "delete", "J/K", "reorder", "c", "copy global", "a", "auto-run", "i", "inbox", "?", "help")
 	}
 	if m.showHelp {
-		help = helpLine("tab/1-4", "switch tabs", "j/k", "move", "g/G", "top/bottom", "R", "refresh now") + "\n" +
+		help = helpLine("tab/1-5", "switch tabs", "j/k", "move", "g/G", "top/bottom", "R", "refresh now") + "\n" +
 			sMuted.Render("Config: "+m.cfg.Path()) + "\n" + help
 	}
 	if m.status != "" {

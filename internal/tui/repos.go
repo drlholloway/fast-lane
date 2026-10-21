@@ -196,7 +196,9 @@ func (m *Model) reposKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+// saveConfig writes the config and hands the manager a fresh copy.
 func (m *Model) saveConfig(format string, args ...any) tea.Cmd {
+	m.mgr.SetConfig(m.cfg)
 	if err := m.cfg.Save(); err != nil {
 		m.setStatus(true, "Could not save config: %v", err)
 		return nil

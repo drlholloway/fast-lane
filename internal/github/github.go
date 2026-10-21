@@ -81,6 +81,41 @@ type Client interface {
 	// Inbox returns review requests, mentions and assignments for me from
 	// notifications updated since since.
 	Inbox(ctx context.Context, me string, since time.Time) ([]InboxItem, error)
+	// Auth reports who the gh credentials belong to and what they allow.
+	Auth(ctx context.Context) (Auth, error)
+}
+
+// Auth describes the credentials Fast Lane uses.
+type Auth struct {
+	Login string
+	// Scopes are the OAuth scopes of a classic token. ScopesKnown is false
+	// for tokens that do not report scopes, such as fine-grained ones.
+	Scopes      []string
+	ScopesKnown bool
+}
+
+func (r *REST) Auth(ctx context.Context) (Auth, error) {
+	resp, err := r.c.RequestWithContext(ctx, http.MethodGet, "user", nil)
+	if err != nil {
+		return Auth{}, err
+	}
+	defer resp.Body.Close()
+	var u struct {
+		Login string `json:"login"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&u); err != nil {
+		return Auth{}, err
+	}
+	a := Auth{Login: u.Login}
+	if h, ok := resp.Header["X-Oauth-Scopes"]; ok {
+		a.ScopesKnown = true
+		for _, sc := range strings.Split(strings.Join(h, ","), ",") {
+			if sc = strings.TrimSpace(sc); sc != "" {
+				a.Scopes = append(a.Scopes, sc)
+			}
+		}
+	}
+	return a, nil
 }
 
 // REST implements Client with go-gh, which reuses the gh CLI's auth.
