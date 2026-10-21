@@ -25,13 +25,14 @@ go build -o fast-lane . && ./fast-lane
 
 ## Using it
 
-The screen has three tabs. Switch between them with `1`/`2`/`3` or `tab`.
+The screen has four tabs. Switch between them with `1`–`4` or `tab`.
 
 | Tab | What it shows | Keys |
 | --- | --- | --- |
 | **Events** | Open PRs, issues, Dependabot alerts and code scanning alerts on watched repos. A `●` marks an item that's new or changed since you last acted on it, and a tag such as `[CI failed]` says what changed. | `enter` start Claude (you can edit the instructions first, then `ctrl+s`) · `s` jump to its session · `o` open in browser · `x` dismiss until it changes |
 | **Sessions** | Every Claude session and its live transcript, with status and cost. | `enter` reply to a finished session or answer a pending prompt · `x` stop · `pgup`/`pgdn` scroll · `f` follow |
-| **Repos** | Your repos, starred repos and repos where you have open PRs. | `space` watch/unwatch · `a` toggle auto-run · `e` choose event kinds and local checkout · `f` cycle filter · `/` search |
+| **Repos** | Your repos, starred repos and repos where you have open PRs. | `space` watch/unwatch · `a` toggle auto-run · `e` choose event kinds and local checkout · `r` edit its rules · `f` cycle filter · `/` search |
+| **Rules** | The [auto rules](#configuration) for the global scope or one watched repo, in the order they're tried, plus the inbox and the repo's auto-run setting. Changes are saved to the config file and apply from the next poll. | `[`/`]` switch scope · `n` new rule · `enter` edit · `d` delete · `J`/`K` reorder · `c` copy the global rules into this repo · `a` toggle the repo's auto-run · `i` cycle the inbox (auto-run, list only, off) |
 
 `R` refreshes everything, `?` shows more help, and `q` quits.
 
@@ -88,7 +89,7 @@ A rule for one of these keys can also filter, for example `skip_bots` or `skip_l
 
 ## Configuration
 
-Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and are written for you as you use the Repos tab. Use `-config <path>` to choose another file.
+Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and are written for you as you use the Repos and Rules tabs. Edits you make to the file by hand take effect when Fast Lane restarts. Use `-config <path>` to choose another file.
 
 ```json
 {
@@ -144,7 +145,7 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
   - The trigger: `.Trigger`, `.Actor` (who caused it) and `.Detail` (the comment or review text, the labels added, or the commit).
 
   The defaults are in [`internal/prompt/prompt.go`](internal/prompt/prompt.go).
-- **`auto_rules`**: choose what auto-runs on repos with `auto_run` on, keyed like `prompts`: a plain kind means `opened`, and `kind:trigger` covers another trigger. With no rules anywhere, every newly opened item auto-runs and no other trigger does. Once rules exist, only the keys listed auto-run, and only items that pass every filter set on the rule (an empty rule `{}` accepts every item). A key can also hold a list of rules, tried in order, where the first that accepts the item wins. For example, Dependabot PRs can get their own prompt and actions ahead of a general PR rule. A repo's own `auto_rules` replace the global ones entirely. Events that don't match still show up in the feed for you to start by hand. Filters, all compared without regard to case:
+- **`auto_rules`**: edit these in the Rules tab, or by hand here. The rule form shows only the fields that apply to the kind, checks the rule the same way loading the config does, and opens prompts in an editor that starts from the default template (`ctrl+r` resets to it). They choose what auto-runs on repos with `auto_run` on, keyed like `prompts`: a plain kind means `opened`, and `kind:trigger` covers another trigger. With no rules anywhere, every newly opened item auto-runs and no other trigger does. Once rules exist, only the keys listed auto-run, and only items that pass every filter set on the rule (an empty rule `{}` accepts every item). A key can also hold a list of rules, tried in order, where the first that accepts the item wins. For example, Dependabot PRs can get their own prompt and actions ahead of a general PR rule. A repo's own `auto_rules` replace the global ones entirely. Events that don't match still show up in the feed for you to start by hand. Filters, all compared without regard to case:
   - `min_severity` (alerts only): `low`, `medium`, `high` or `critical`. Code scanning's `note`, `warning` and `error` rank with `low`, `medium` and `high`.
   - `labels` / `skip_labels` (PRs and issues only): require at least one of these labels / skip events with any of them.
   - `authors` / `skip_authors`: require / skip these logins.

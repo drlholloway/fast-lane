@@ -169,3 +169,16 @@ func TestRulesObjectOrList(t *testing.T) {
 		t.Fatalf("every rule in a list should be validated, got %v", err)
 	}
 }
+
+func TestSaveKeepsPromptsReadable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg, _ := Load(path)
+	cfg.AutoRules = map[RuleKey]Rules{"issue": {{Prompt: "if a < b && c > d"}}}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	if !strings.Contains(string(b), "if a < b && c > d") || !strings.HasSuffix(string(b), "}\n") {
+		t.Fatalf("prompt escaped or file malformed:\n%s", b)
+	}
+}

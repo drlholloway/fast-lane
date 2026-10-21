@@ -89,14 +89,34 @@ func run(m *Model, cmd tea.Cmd) {
 	}
 }
 
+var namedKeys = map[string]tea.KeyType{
+	"enter": tea.KeyEnter, "esc": tea.KeyEsc, "up": tea.KeyUp, "down": tea.KeyDown,
+	"left": tea.KeyLeft, "right": tea.KeyRight, "tab": tea.KeyTab, "ctrl+s": tea.KeyCtrlS, "ctrl+r": tea.KeyCtrlR,
+}
+
 func press(s string) tea.KeyMsg {
-	switch s {
-	case "enter":
-		return tea.KeyMsg{Type: tea.KeyEnter}
-	case " ":
+	if t, ok := namedKeys[s]; ok {
+		return tea.KeyMsg{Type: t}
+	}
+	if s == " " {
 		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+}
+
+// keys presses each key in turn.
+func keys(m *Model, ks ...string) {
+	for _, k := range ks {
+		_, cmd := m.Update(press(k))
+		run(m, cmd)
+	}
+}
+
+// typeText types s one character at a time.
+func typeText(m *Model, s string) {
+	for _, r := range s {
+		keys(m, string(r))
+	}
 }
 
 func TestWatchRepoAndBaseline(t *testing.T) {

@@ -179,6 +179,12 @@ func (m *Model) reposKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		m.dialog = newKindsDialog(*rc, m.width)
+	case "r":
+		if m.cfg.Repo(r.FullName) == nil {
+			m.setStatus(false, "Watch %s first (space)", r.FullName)
+			return nil
+		}
+		m.ruleScope, m.ruleCursor, m.tab = r.FullName, 0, tabRules
 	case "o":
 		return m.open(r.HTMLURL)
 	}

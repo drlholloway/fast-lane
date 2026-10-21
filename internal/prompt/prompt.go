@@ -178,23 +178,37 @@ type Data struct {
 	Detail string
 }
 
+// Template returns the template a rule without its own prompt would use for
+// kind k and trigger t.
+func Template(cfg *config.Config, k config.EventKind, t config.Trigger) string {
+	src, _ := lookup(cfg, k, t)
+	return src
+}
+
+// lookup finds the template for k and t: cfg's, then the built-in one,
+// then the same for the kind alone, reporting whether it fell back.
+func lookup(cfg *config.Config, k config.EventKind, t config.Trigger) (string, bool) {
+	key, kindKey := config.Key(k, t), config.RuleKey(k)
+	if src := cfg.Prompts[key]; src != "" {
+		return src, false
+	}
+	if src := Defaults[key]; src != "" {
+		return src, false
+	}
+	if src := cfg.Prompts[kindKey]; src != "" {
+		return src, key != kindKey
+	}
+	return Defaults[kindKey], key != kindKey
+}
+
 // Render builds the prompt for change c on ev. The first template that is
 // set wins: override (usually a rule's prompt), then cfg's prompt and the
 // built-in one for the kind and trigger, then for the kind alone.
 func Render(cfg *config.Config, ev github.Event, c github.Change, override string) (string, error) {
-	key, kindKey := config.Key(ev.Kind, c.Trigger), config.RuleKey(ev.Kind)
-	src := override
+	key := config.Key(ev.Kind, c.Trigger)
+	src, fallback := override, false
 	if src == "" {
-		src = cfg.Prompts[key]
-	}
-	if src == "" {
-		src = Defaults[key]
-	}
-	fallback := src == "" && key != kindKey
-	if fallback {
-		if src = cfg.Prompts[kindKey]; src == "" {
-			src = Defaults[kindKey]
-		}
+		src, fallback = lookup(cfg, ev.Kind, c.Trigger)
 	}
 	if src == "" {
 		return "", fmt.Errorf("no prompt template for %s", key)

@@ -31,9 +31,10 @@ const (
 	tabEvents tab = iota
 	tabSessions
 	tabRepos
+	tabRules
 )
 
-var tabNames = []string{"Events", "Sessions", "Repos"}
+var tabNames = []string{"Events", "Sessions", "Repos", "Rules"}
 
 type (
 	loadedMsg struct {
@@ -97,6 +98,10 @@ type Model struct {
 	lastPoll    time.Time
 	nextPoll    time.Time
 	pollErrs    map[string]string
+
+	// Rules tab: the scope is "" for the global rules or a watched repo.
+	ruleScope  string
+	ruleCursor int
 
 	// Sessions tab.
 	sessions   []claude.Session
@@ -676,10 +681,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.showHelp = !m.showHelp
 		return nil
 	case "tab":
-		m.tab = (m.tab + 1) % 3
+		m.tab = (m.tab + 1) % tab(len(tabNames))
 		return nil
 	case "shift+tab":
-		m.tab = (m.tab + 2) % 3
+		m.tab = (m.tab + tab(len(tabNames)) - 1) % tab(len(tabNames))
 		return nil
 	case "1":
 		m.tab = tabEvents
@@ -689,6 +694,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	case "3":
 		m.tab = tabRepos
+		return nil
+	case "4":
+		m.tab = tabRules
 		return nil
 	case "R":
 		m.setStatus(false, "Refreshing…")
@@ -701,6 +709,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.sessionsKey(msg)
 	case tabRepos:
 		return m.reposKey(msg)
+	case tabRules:
+		return m.rulesKey(msg)
 	}
 	return nil
 }
@@ -762,6 +772,8 @@ func (m *Model) View() string {
 			body = m.sessionsView(bodyH)
 		case tabRepos:
 			body = m.reposView(bodyH)
+		case tabRules:
+			body = m.rulesView(bodyH)
 		}
 	}
 	body = lipgloss.NewStyle().Height(bodyH).MaxHeight(bodyH).Render(body)
@@ -829,10 +841,12 @@ func (m *Model) footerView() string {
 	case m.tab == tabSessions:
 		help = helpLine("enter", "reply/answer", "x", "stop", "o", "open", "pgup/pgdn", "scroll", "?", "help", "q", "quit")
 	case m.tab == tabRepos:
-		help = helpLine("space", "watch", "a", "auto-run", "e", "events", "f", "source", "/", "filter", "?", "help", "q", "quit")
+		help = helpLine("space", "watch", "a", "auto-run", "e", "events", "r", "rules", "f", "source", "/", "filter", "?", "help", "q", "quit")
+	case m.tab == tabRules:
+		help = helpLine("[/]", "scope", "n", "new", "enter", "edit", "d", "delete", "J/K", "reorder", "c", "copy global", "a", "auto-run", "i", "inbox", "?", "help")
 	}
 	if m.showHelp {
-		help = helpLine("tab/1-3", "switch tabs", "j/k", "move", "g/G", "top/bottom", "R", "refresh now") + "\n" +
+		help = helpLine("tab/1-4", "switch tabs", "j/k", "move", "g/G", "top/bottom", "R", "refresh now") + "\n" +
 			sMuted.Render("Config: "+m.cfg.Path()) + "\n" + help
 	}
 	if m.status != "" {

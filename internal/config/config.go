@@ -160,6 +160,15 @@ func checkRules(key RuleKey, k EventKind, rs Rules) error {
 	return nil
 }
 
+// ValidateRule checks rule r under key the way Load does.
+func ValidateRule(key RuleKey, r Rule) error {
+	k, t, err := key.Parse()
+	if err != nil {
+		return err
+	}
+	return r.validate(Key(k, t), k)
+}
+
 func checkPrompt(key RuleKey, _ EventKind, src string) error {
 	if _, err := template.New(string(key)).Parse(src); err != nil {
 		return fmt.Errorf("%s: %w", key, err)
@@ -229,10 +238,19 @@ type Rule struct {
 type Rules []Rule
 
 func (rs Rules) MarshalJSON() ([]byte, error) {
+	var v any = []Rule(rs)
 	if len(rs) == 1 {
-		return json.Marshal(rs[0])
+		v = rs[0]
 	}
-	return json.Marshal([]Rule(rs))
+	// Encode without HTML escaping, which json.Marshal would apply to the
+	// prompts no matter how the outer encoder is set.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 func (rs *Rules) UnmarshalJSON(b []byte) error {
@@ -484,10 +502,15 @@ func (c *Config) Save() error {
 		return errors.New("config has no path")
 	}
 	sort.Slice(c.Repos, func(i, j int) bool { return c.Repos[i].FullName < c.Repos[j].FullName })
-	b, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
+	// Prompts are edited by hand, so keep <, > and & readable.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(c); err != nil {
 		return err
 	}
+	b := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 	if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {
 		return err
 	}
