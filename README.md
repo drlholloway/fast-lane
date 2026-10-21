@@ -47,8 +47,8 @@ When Claude finishes a turn, press `enter` on the session to reply. The conversa
 ### Safety defaults
 
 - New repos are watched **without** auto-run. Turn it on per repo with `a`, and narrow it with `auto_rules` (see [Configuration](#configuration)). Events that already exist when you start watching a repo never auto-run, only ones that show up later.
-- Claude runs with `--permission-mode manual`, and only read-only tools are pre-approved (`Read`, `Grep`, `Glob`, `git status/diff/log/show`, and `gh pr view/diff/checks`, `gh issue view`, `gh api`). Anything else asks you first.
-- The built-in prompts tell Claude to ask before pushing, merging, closing, submitting reviews or dismissing alerts.
+- Claude runs with `--permission-mode manual`, and only read-only tools are pre-approved (`Read`, `Grep`, `Glob`, `git status/diff/log/show`, and `gh pr view/diff/checks`, `gh issue view`, and `gh api --method GET` for API reads). Anything else asks you first, including `gh api` writes.
+- Claude's system prompt tells it to ask before pushing, opening PRs, commenting, labeling, submitting reviews, closing, merging or dismissing alerts, unless an auto rule's `allow` list pre-approves that action. It always asks before pushing to the default branch or force-pushing.
 - Sessions for the same repo run one at a time because they share a working copy. At most `max_concurrent` sessions run overall.
 
 ## Configuration
@@ -72,7 +72,7 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
     "issue": "Triage issue #{{.Number}} in {{.Repo}}: {{.Title}}\n\n{{.Body}}"
   },
   "auto_rules": {
-    "dependabot_alert": { "min_severity": "high" },
+    "dependabot_alert": { "min_severity": "high", "allow": ["edit", "push_branch", "open_pr"] },
     "pull_request": { "skip_drafts": true, "skip_bots": true, "skip_authors": ["you"] }
   },
   "repos": [
@@ -82,7 +82,12 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
       "events": ["pull_request", "issue", "dependabot_alert", "code_scanning_alert"],
       "auto_run": false,
       "auto_rules": {
-        "issue": { "labels": ["bug"], "skip_labels": ["wontfix"] }
+        "issue": {
+          "labels": ["bug"],
+          "skip_labels": ["wontfix"],
+          "prompt": "Fix bug #{{.Number}} in {{.Repo}}: {{.Title}}\n\n{{.Body}}",
+          "allow": ["edit", "comment"]
+        }
       }
     }
   ]
@@ -91,13 +96,30 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
 
 - **`workspace_dir`**: repos without a `local_path` are cloned here with `gh repo clone` on first use and fetched before each new session.
 - **`permission_mode`**: any mode `claude --permission-mode` accepts (`manual`, `acceptEdits`, `auto`, …). Prompts the mode doesn't settle on its own still come to the TUI.
-- **`prompts`**: override the instructions for an event kind (`pull_request`, `issue`, `dependabot_alert`, `code_scanning_alert`). Templates use Go `text/template` and can use `.Repo`, `.Number`, `.Title`, `.URL`, `.Author`, `.Bot`, `.Labels`, `.Branch`, `.Severity`, `.Body`, `.Draft`, `.Kind`, `.CreatedAt` and `.UpdatedAt`. The defaults are in [`internal/prompt/prompt.go`](internal/prompt/prompt.go).
+- **`prompts`**: override the instructions for an event kind (an auto rule's `prompt` takes precedence) (`pull_request`, `issue`, `dependabot_alert`, `code_scanning_alert`). Templates use Go `text/template` and can use `.Repo`, `.Number`, `.Title`, `.URL`, `.Author`, `.Bot`, `.Labels`, `.Branch`, `.Severity`, `.Body`, `.Draft`, `.Kind`, `.CreatedAt` and `.UpdatedAt`. The defaults are in [`internal/prompt/prompt.go`](internal/prompt/prompt.go).
 - **`auto_rules`**: choose which new events auto-run on repos with `auto_run` on. With no rules anywhere, every new event auto-runs. Once rules exist, only the kinds listed auto-run, and only events that pass every filter set on their kind's rule (an empty rule `{}` accepts every event of that kind). A repo's own `auto_rules` replace the global ones entirely. Events that don't match still show up in the feed for you to start by hand. Filters, all compared without regard to case:
   - `min_severity` (alerts only): `low`, `medium`, `high` or `critical`. Code scanning's `note`, `warning` and `error` rank with `low`, `medium` and `high`.
   - `labels` / `skip_labels` (PRs and issues only): require at least one of these labels / skip events with any of them.
   - `authors` / `skip_authors`: require / skip these logins.
   - `skip_drafts` (PRs only): skip draft pull requests.
   - `skip_bots`: skip events opened by bot accounts, Dependabot alerts included.
+
+  A rule also shapes the sessions it covers, whether they auto-run or you start them with `enter`:
+  - `prompt`: a template that replaces the kind's prompt (same fields as `prompts`).
+  - `allow`: actions Claude may take without asking. Each one pre-approves the tools below for that session and tells Claude it needs no approval. Anything not allowed still comes to you as a question or permission dialog.
+
+  | Action | Pre-approves |
+  |---|---|
+  | `edit` | `Edit`, `Write`, `git checkout/switch/add/commit` |
+  | `push_branch` | `git push` of new branches (never the default branch, never with force) |
+  | `open_pr` | `gh pr create` |
+  | `update_pr` | `gh pr checkout`, `git push`, `gh pr edit`, `gh pr ready` |
+  | `comment` | `gh issue comment`, `gh pr comment` |
+  | `label` | `gh issue edit`, `gh pr edit` |
+  | `review` | `gh pr review` |
+  | `close` | `gh issue close`, `gh pr close` |
+  | `merge` | `gh pr merge` |
+  | `dismiss_alert` | `gh api --method PATCH` on this repo's Dependabot and code scanning alerts |
 
 Runtime state lives in `~/.local/state/fast-lane/` (or `$XDG_STATE_HOME`): seen and dismissed events, session history in `state.json`, and the raw stream-json log of each session in `logs/`.
 

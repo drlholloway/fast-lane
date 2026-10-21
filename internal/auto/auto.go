@@ -9,20 +9,29 @@ import (
 	"github.com/drlholloway/fast-lane/internal/github"
 )
 
-// Match reports whether ev should start a session without asking on repo r.
-// The repo must have auto-run on. With no rules configured every event
-// matches; otherwise only kinds that have a rule do, and only when the rule
-// accepts the event.
+// Match reports whether ev should start a session without asking on repo r:
+// r has auto-run on and RuleFor finds a rule for ev.
 func Match(cfg *config.Config, r config.Repo, ev github.Event) bool {
 	if !r.AutoRun {
 		return false
 	}
+	_, ok := RuleFor(cfg, r, ev)
+	return ok
+}
+
+// RuleFor returns the rule that governs ev on repo r, whether or not r has
+// auto-run on. With no rules configured every event gets the zero rule;
+// otherwise ok is false unless ev's kind has a rule that accepts it.
+func RuleFor(cfg *config.Config, r config.Repo, ev github.Event) (config.Rule, bool) {
 	rules := cfg.RulesFor(r)
 	if rules == nil {
-		return true
+		return config.Rule{}, true
 	}
 	rule, ok := rules[ev.Kind]
-	return ok && Accepts(rule, ev)
+	if !ok || !Accepts(rule, ev) {
+		return config.Rule{}, false
+	}
+	return rule, true
 }
 
 // Accepts reports whether ev passes every filter set on rule.

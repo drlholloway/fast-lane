@@ -33,12 +33,13 @@ func (m *Model) eventsKey(msg tea.KeyMsg) tea.Cmd {
 			m.jumpToSession(s.ID)
 			return nil
 		}
-		text, err := prompt.Render(m.cfg, ev)
+		rule := m.ruleFor(ev)
+		text, err := prompt.Render(m.cfg, ev, rule.Prompt)
 		if err != nil {
 			m.setStatus(true, "%v", err)
 			return nil
 		}
-		m.dialog = newStartDialog(ev, text, m.cfg.WorkDir(ev.Repo), m.width, m.height)
+		m.dialog = newStartDialog(ev, text, rule.Allow, m.cfg.WorkDir(ev.Repo), m.width, m.height)
 	case "s":
 		if s, ok := m.sessionFor(ev.Key); ok {
 			m.jumpToSession(s.ID)

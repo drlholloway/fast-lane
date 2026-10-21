@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,8 @@ type Session struct {
 	Result   string       `json:"result,omitempty"`
 	Err      string       `json:"error,omitempty"`
 	Lines    []Line       `json:"lines,omitempty"`
+	// Allow lists the actions Claude may take without asking.
+	Allow []config.Action `json:"allow,omitempty"`
 	// Pending holds requests waiting for the user, oldest first.
 	Pending []Request `json:"-"`
 
@@ -200,19 +203,19 @@ func (m *Manager) ActiveCount() int {
 
 // Start queues a new session for ev using its rendered prompt template.
 func (m *Manager) Start(ev github.Event) (int, error) {
-	text, err := prompt.Render(m.cfg, ev)
+	text, err := prompt.Render(m.cfg, ev, "")
 	if err != nil {
 		return 0, err
 	}
-	return m.StartPrompt(ev, text), nil
+	return m.StartPrompt(ev, text, nil), nil
 }
 
-// StartPrompt queues a new session for ev with custom instructions and
-// returns its ID.
-func (m *Manager) StartPrompt(ev github.Event, text string) int {
+// StartPrompt queues a new session for ev with custom instructions and the
+// actions Claude may take without asking, and returns its ID.
+func (m *Manager) StartPrompt(ev github.Event, text string, allow []config.Action) int {
 	m.mu.Lock()
 	now := time.Now()
-	s := &Session{ID: m.nextID, Event: ev, Status: StatusQueued, Started: now, Updated: now, nextInput: text}
+	s := &Session{ID: m.nextID, Event: ev, Status: StatusQueued, Started: now, Updated: now, Allow: allow, nextInput: text}
 	m.nextID++
 	m.sessions = append(m.sessions, s)
 	m.queue = append(m.queue, s.ID)
@@ -401,7 +404,7 @@ func (m *Manager) execute(id int, p *proc, input string) {
 
 	m.mu.Lock()
 	s := m.find(id)
-	repo, resume := s.Event.Repo, s.ClaudeID
+	repo, resume, allow := s.Event.Repo, s.ClaudeID, s.Allow
 	m.mu.Unlock()
 
 	dir := m.cfg.WorkDir(repo)
@@ -412,7 +415,7 @@ func (m *Manager) execute(id int, p *proc, input string) {
 		}
 	}
 
-	err := m.runClaude(id, p, dir, resume, input)
+	err := m.runClaude(id, p, dir, repo, resume, allow, input)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s = m.find(id)
@@ -469,7 +472,7 @@ func (m *Manager) prepareWorkdir(id int, repo, dir string) error {
 	return nil
 }
 
-func (m *Manager) claudeArgs(resume string) ([]string, error) {
+func (m *Manager) claudeArgs(repo, resume string, allow []config.Action) ([]string, error) {
 	c := m.cfg.Claude
 	args := []string{
 		"-p",
@@ -477,7 +480,7 @@ func (m *Manager) claudeArgs(resume string) ([]string, error) {
 		"--output-format", "stream-json",
 		"--verbose",
 		"--permission-prompt-tool", "stdio",
-		"--append-system-prompt", prompt.System,
+		"--append-system-prompt", prompt.System(allow),
 	}
 	if c.PermissionMode != "" {
 		args = append(args, "--permission-mode", c.PermissionMode)
@@ -488,10 +491,18 @@ func (m *Manager) claudeArgs(resume string) ([]string, error) {
 	if c.MaxBudgetUSD > 0 {
 		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", c.MaxBudgetUSD))
 	}
-	if len(c.AllowedTools) > 0 {
+	tools := slices.Clone(c.AllowedTools)
+	for _, a := range allow {
+		for _, t := range a.Tools(repo) {
+			if !slices.Contains(tools, t) {
+				tools = append(tools, t)
+			}
+		}
+	}
+	if len(tools) > 0 {
 		// Passing rules through --settings avoids splitting rules that
 		// contain spaces or commas.
-		settings, err := json.Marshal(map[string]any{"permissions": map[string]any{"allow": c.AllowedTools}})
+		settings, err := json.Marshal(map[string]any{"permissions": map[string]any{"allow": tools}})
 		if err != nil {
 			return nil, err
 		}
@@ -503,8 +514,8 @@ func (m *Manager) claudeArgs(resume string) ([]string, error) {
 	return append(args, c.ExtraArgs...), nil
 }
 
-func (m *Manager) runClaude(id int, p *proc, dir, resume, input string) error {
-	args, err := m.claudeArgs(resume)
+func (m *Manager) runClaude(id int, p *proc, dir, repo, resume string, allow []config.Action, input string) error {
+	args, err := m.claudeArgs(repo, resume, allow)
 	if err != nil {
 		return err
 	}

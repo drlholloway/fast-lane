@@ -171,6 +171,37 @@ func TestAutoRulesFilterNewEvents(t *testing.T) {
 	}
 }
 
+func TestRulePromptAndActionsShapeSessions(t *testing.T) {
+	m, gh := newTestModel(t)
+	m.cfg.AutoRules = map[config.EventKind]config.Rule{
+		config.KindDependabot: {Prompt: "bump #{{.Number}}", Allow: []config.Action{config.ActionPushBranch, config.ActionOpenPR}},
+	}
+	m.cfg.Watch("me/app").AutoRun = true
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+	gh.events = []github.Event{ev(6, config.KindDependabot)}
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+	ss := m.mgr.Snapshot()
+	if len(ss) != 1 || len(ss[0].Allow) != 2 {
+		t.Fatalf("auto session should carry the rule's actions: %+v", ss)
+	}
+
+	// Starting by hand shows the same rule in the start dialog.
+	m.cfg.Repo("me/app").AutoRun = false
+	gh.events = append(gh.events, ev(7, config.KindDependabot))
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+	m.tab = tabEvents
+	for i, e := range m.feed {
+		if e.Number == 7 {
+			m.eventCursor = i
+		}
+	}
+	m.Update(press("enter"))
+	view := m.View()
+	if !strings.Contains(view, "bump #7") || !strings.Contains(view, "Allowed without asking: push_branch, open_pr") {
+		t.Fatalf("start dialog should show the rule's prompt and actions:\n%s", view)
+	}
+}
+
 func TestPermissionDialogFlow(t *testing.T) {
 	m, _ := newTestModel(t)
 	s := claude.Session{ID: 1, Event: ev(1, config.KindIssue), Status: claude.StatusWaiting}

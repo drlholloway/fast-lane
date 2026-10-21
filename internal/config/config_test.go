@@ -71,11 +71,14 @@ func TestLoadValidatesAutoRules(t *testing.T) {
 	tests := map[string]string{
 		`{"auto_rules":{"dependabot_alert":{"min_severity":"high"}},
 		  "repos":[{"full_name":"o/r","auto_rules":{"pull_request":{"skip_drafts":true,"labels":["bug"]}}}]}`: "",
-		`{"auto_rules":{"pr":{}}}`:                                                    "unknown event kind",
-		`{"auto_rules":{"issue":{"min_severity":"high"}}}`:                            "only applies to alerts",
-		`{"auto_rules":{"dependabot_alert":{"min_severity":"severe"}}}`:               "unknown min_severity",
-		`{"auto_rules":{"code_scanning_alert":{"labels":["x"]}}}`:                     "only apply to pull requests",
-		`{"repos":[{"full_name":"o/r","auto_rules":{"issue":{"skip_drafts":true}}}]}`: "o/r auto_rules",
+		`{"auto_rules":{"pr":{}}}`:                                                           "unknown event kind",
+		`{"auto_rules":{"issue":{"min_severity":"high"}}}`:                                   "only applies to alerts",
+		`{"auto_rules":{"dependabot_alert":{"min_severity":"severe"}}}`:                      "unknown min_severity",
+		`{"auto_rules":{"code_scanning_alert":{"labels":["x"]}}}`:                            "only apply to pull requests",
+		`{"repos":[{"full_name":"o/r","auto_rules":{"issue":{"skip_drafts":true}}}]}`:        "o/r auto_rules",
+		`{"auto_rules":{"issue":{"allow":["comment","label"],"prompt":"Fix #{{.Number}}"}}}`: "",
+		`{"auto_rules":{"issue":{"allow":["push"]}}}`:                                        "unknown action",
+		`{"auto_rules":{"issue":{"prompt":"{{.Number"}}}`:                                    "prompt:",
 	}
 	for raw, want := range tests {
 		path := filepath.Join(t.TempDir(), "config.json")

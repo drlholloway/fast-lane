@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -91,6 +92,68 @@ type Rule struct {
 	SkipDrafts bool `json:"skip_drafts,omitempty"`
 	// SkipBots skips events opened by bot accounts.
 	SkipBots bool `json:"skip_bots,omitempty"`
+
+	// Prompt replaces the kind's prompt template for events this rule accepts.
+	Prompt string `json:"prompt,omitempty"`
+	// Allow lists actions Claude may take without asking.
+	Allow []Action `json:"allow,omitempty"`
+}
+
+// Action is something Claude can be pre-approved to do in a session.
+type Action string
+
+const (
+	ActionEdit         Action = "edit"
+	ActionPushBranch   Action = "push_branch"
+	ActionOpenPR       Action = "open_pr"
+	ActionUpdatePR     Action = "update_pr"
+	ActionComment      Action = "comment"
+	ActionLabel        Action = "label"
+	ActionReview       Action = "review"
+	ActionClose        Action = "close"
+	ActionMerge        Action = "merge"
+	ActionDismissAlert Action = "dismiss_alert"
+)
+
+// AllActions lists every action in the order they are described to Claude.
+var AllActions = []Action{
+	ActionEdit, ActionPushBranch, ActionOpenPR, ActionUpdatePR, ActionComment, ActionLabel,
+	ActionReview, ActionClose, ActionMerge, ActionDismissAlert,
+}
+
+// actionInfo describes each action. "{repo}" in a tool rule is replaced with
+// the session's repository.
+var actionInfo = map[Action]struct {
+	desc  string
+	tools []string
+}{
+	ActionEdit: {"", []string{"Edit", "Write",
+		"Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git add:*)", "Bash(git commit:*)"}},
+	ActionPushBranch: {"push new branches", []string{"Bash(git push:*)"}},
+	ActionOpenPR:     {"open pull requests", []string{"Bash(gh pr create:*)"}},
+	ActionUpdatePR: {"update existing pull requests (push commits to their branch, edit their title and description, mark them ready for review)",
+		[]string{"Bash(gh pr checkout:*)", "Bash(git push:*)", "Bash(gh pr edit:*)", "Bash(gh pr ready:*)"}},
+	ActionComment: {"comment on issues and pull requests", []string{"Bash(gh issue comment:*)", "Bash(gh pr comment:*)"}},
+	ActionLabel:   {"add or remove labels", []string{"Bash(gh issue edit:*)", "Bash(gh pr edit:*)"}},
+	ActionReview:  {"submit pull request reviews", []string{"Bash(gh pr review:*)"}},
+	ActionClose:   {"close issues or pull requests", []string{"Bash(gh issue close:*)", "Bash(gh pr close:*)"}},
+	ActionMerge:   {"merge pull requests", []string{"Bash(gh pr merge:*)"}},
+	ActionDismissAlert: {"dismiss security alerts", []string{
+		"Bash(gh api --method PATCH repos/{repo}/dependabot/alerts/:*)",
+		"Bash(gh api --method PATCH repos/{repo}/code-scanning/alerts/:*)"}},
+}
+
+// Describe returns how the action is named in Claude's instructions. It is
+// empty for actions that only pre-approve tools.
+func (a Action) Describe() string { return actionInfo[a].desc }
+
+// Tools returns the permission rules the action pre-approves in repo.
+func (a Action) Tools(repo string) []string {
+	out := make([]string, len(actionInfo[a].tools))
+	for i, t := range actionInfo[a].tools {
+		out[i] = strings.ReplaceAll(t, "{repo}", repo)
+	}
+	return out
 }
 
 func (r Rule) validate(k EventKind) error {
@@ -107,6 +170,14 @@ func (r Rule) validate(k EventKind) error {
 		return fmt.Errorf("%s: labels and skip_labels only apply to pull requests and issues", k)
 	case r.SkipDrafts && k != KindPullRequest:
 		return fmt.Errorf("%s: skip_drafts only applies to pull requests", k)
+	}
+	for _, a := range r.Allow {
+		if _, ok := actionInfo[a]; !ok {
+			return fmt.Errorf("%s: unknown action %q in allow", k, a)
+		}
+	}
+	if _, err := template.New(string(k)).Parse(r.Prompt); err != nil {
+		return fmt.Errorf("%s: prompt: %w", k, err)
 	}
 	return nil
 }
@@ -185,7 +256,7 @@ func Default() *Config {
 				"Read", "Grep", "Glob",
 				"Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
 				"Bash(gh pr view:*)", "Bash(gh pr diff:*)", "Bash(gh pr checks:*)",
-				"Bash(gh issue view:*)", "Bash(gh api:*)",
+				"Bash(gh issue view:*)", "Bash(gh api --method GET:*)", "Bash(gh api -X GET:*)",
 			},
 		},
 	}

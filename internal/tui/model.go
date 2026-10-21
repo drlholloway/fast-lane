@@ -374,15 +374,27 @@ func (m *Model) sessionFor(key string) (claude.Session, bool) {
 }
 
 func (m *Model) startSession(ev github.Event) error {
-	text, err := prompt.Render(m.cfg, ev)
+	rule := m.ruleFor(ev)
+	text, err := prompt.Render(m.cfg, ev, rule.Prompt)
 	if err != nil {
 		return err
 	}
-	return m.startSessionWithPrompt(ev, text)
+	return m.startSessionWithPrompt(ev, text, rule.Allow)
 }
 
-func (m *Model) startSessionWithPrompt(ev github.Event, text string) error {
-	id := m.mgr.StartPrompt(ev, text)
+// ruleFor returns the auto rule that governs ev, or the zero rule when none
+// does. Rules shape manual sessions too, not only auto-run ones.
+func (m *Model) ruleFor(ev github.Event) config.Rule {
+	rc := m.cfg.Repo(ev.Repo)
+	if rc == nil {
+		return config.Rule{}
+	}
+	rule, _ := auto.RuleFor(m.cfg, *rc, ev)
+	return rule
+}
+
+func (m *Model) startSessionWithPrompt(ev github.Event, text string, allow []config.Action) error {
+	id := m.mgr.StartPrompt(ev, text, allow)
 	m.st.EventSessions[ev.Key] = id
 	delete(m.fresh, ev.Key)
 	m.dirty = true

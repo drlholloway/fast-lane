@@ -150,6 +150,48 @@ func TestSessionPermissionRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClaudeArgsAddAllowedActions(t *testing.T) {
+	m := NewManager(config.Default(), "")
+	defer m.Shutdown()
+	args, err := m.claudeArgs("o/r", "", []config.Action{config.ActionPushBranch, config.ActionOpenPR, config.ActionUpdatePR, config.ActionDismissAlert})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flag := func(name string) string {
+		for i, a := range args {
+			if a == name && i+1 < len(args) {
+				return args[i+1]
+			}
+		}
+		t.Fatalf("missing %s in %v", name, args)
+		return ""
+	}
+	var settings struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal([]byte(flag("--settings")), &settings); err != nil {
+		t.Fatal(err)
+	}
+	allow := settings.Permissions.Allow
+	if !contains(allow, "Read") || !contains(allow, "Bash(git push:*)") || !contains(allow, "Bash(gh pr create:*)") {
+		t.Fatalf("allowed tools should combine config and actions: %v", allow)
+	}
+	if !contains(allow, "Bash(gh api --method PATCH repos/o/r/dependabot/alerts/:*)") {
+		t.Fatalf("dismiss_alert should be scoped to the session's repo: %v", allow)
+	}
+	if contains(allow, "Bash(gh api:*)") {
+		t.Fatalf("gh api writes must not be pre-approved by default: %v", allow)
+	}
+	if strings.Count(strings.Join(allow, "\n"), "Bash(git push:*)") != 1 {
+		t.Fatalf("duplicate tool rules: %v", allow)
+	}
+	if !strings.Contains(flag("--append-system-prompt"), "You may push new branches, open pull requests, update existing pull requests") {
+		t.Fatal("system prompt should list the allowed actions")
+	}
+}
+
 func TestQueueSerializesSameRepo(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxConcurrent = 5

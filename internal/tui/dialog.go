@@ -394,14 +394,15 @@ func (d *replyDialog) passthrough(msg tea.Msg) tea.Cmd {
 
 type startDialog struct {
 	ev      github.Event
+	allow   []config.Action
 	workdir string
 	ta      textarea.Model
 	width   int
 }
 
-func newStartDialog(ev github.Event, text, workdir string, w, h int) *startDialog {
+func newStartDialog(ev github.Event, text string, allow []config.Action, workdir string, w, h int) *startDialog {
 	dw := dialogWidth(w)
-	return &startDialog{ev: ev, workdir: workdir, ta: newTextarea(dw-6, clamp(h-14, 5, 24), text), width: dw}
+	return &startDialog{ev: ev, allow: allow, workdir: workdir, ta: newTextarea(dw-6, clamp(h-14, 5, 24), text), width: dw}
 }
 
 func (d *startDialog) update(m *Model, msg tea.KeyMsg) (dialog, tea.Cmd) {
@@ -413,7 +414,7 @@ func (d *startDialog) update(m *Model, msg tea.KeyMsg) (dialog, tea.Cmd) {
 		if text == "" {
 			return d, nil
 		}
-		if err := m.startSessionWithPrompt(d.ev, text); err != nil {
+		if err := m.startSessionWithPrompt(d.ev, text, d.allow); err != nil {
 			m.setStatus(true, "Could not start Claude: %v", err)
 			return nil, nil
 		}
@@ -433,6 +434,13 @@ func (d *startDialog) view(m *Model) string {
 	var b strings.Builder
 	b.WriteString(sTitle.Render("Start a Claude session") + "\n")
 	b.WriteString(sMuted.Render(fit(fmt.Sprintf("%s %s #%d · runs in %s", d.ev.Repo, d.ev.Kind.Short(), d.ev.Number, d.workdir), w)) + "\n")
+	if len(d.allow) > 0 {
+		names := make([]string, len(d.allow))
+		for i, a := range d.allow {
+			names[i] = string(a)
+		}
+		b.WriteString(sWarn.Render(fit("Allowed without asking: "+strings.Join(names, ", "), w)) + "\n")
+	}
 	b.WriteString(sMuted.Render("Edit the instructions if you like, then press ctrl+s.") + "\n\n")
 	b.WriteString(d.ta.View())
 	return sDialog.Width(d.width).Render(b.String())
