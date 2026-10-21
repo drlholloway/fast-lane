@@ -18,6 +18,7 @@ import (
 
 	"github.com/drlholloway/fast-lane/internal/config"
 	"github.com/drlholloway/fast-lane/internal/github"
+	"github.com/drlholloway/fast-lane/internal/local"
 	"github.com/drlholloway/fast-lane/internal/prompt"
 )
 
@@ -55,6 +56,12 @@ type Session struct {
 	Lines    []Line       `json:"lines,omitempty"`
 	// Allow lists the actions Claude may take without asking.
 	Allow []config.Action `json:"allow,omitempty"`
+	// Dir is where Claude runs, set when the session first starts. When
+	// Checkout is set, Dir is a git worktree of that local checkout, made
+	// from its Remote.
+	Dir      string `json:"dir,omitempty"`
+	Checkout string `json:"checkout,omitempty"`
+	Remote   string `json:"remote,omitempty"`
 	// Pending holds requests waiting for the user, oldest first.
 	Pending []Request `json:"-"`
 
@@ -117,6 +124,8 @@ type Manager struct {
 	run      Runner
 	ctx      context.Context
 	cancel   context.CancelFunc
+	// checkouts maps lower-case "owner/name" to a local checkout.
+	checkouts map[string]local.Checkout
 	// running tracks execute goroutines so Shutdown can wait for them.
 	running sync.WaitGroup
 }
@@ -361,13 +370,59 @@ func (m *Manager) find(id int) *Session {
 	return nil
 }
 
-func (m *Manager) repoBusy(repo string) bool {
+// dirBusy reports whether a running session works in dir. Sessions that
+// share a clone run one at a time; worktrees are per session.
+func (m *Manager) dirBusy(dir string) bool {
 	for id := range m.procs {
-		if s := m.find(id); s != nil && strings.EqualFold(s.Event.Repo, repo) {
+		if s := m.find(id); s != nil && s.Dir == dir {
 			return true
 		}
 	}
 	return false
+}
+
+// SetCheckouts tells the manager where repositories are checked out on this
+// machine, keyed by lower-case "owner/name".
+func (m *Manager) SetCheckouts(c map[string]local.Checkout) {
+	m.mu.Lock()
+	m.checkouts = c
+	m.mu.Unlock()
+}
+
+// CheckoutFor returns the local checkout sessions on repo make worktrees
+// from: the repo's local_path when set, otherwise one found in code_dirs.
+func (m *Manager) CheckoutFor(repo string) (local.Checkout, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.checkoutFor(repo)
+}
+
+func (m *Manager) checkoutFor(repo string) (local.Checkout, bool) {
+	if r := m.cfg.Repo(repo); r != nil && r.LocalPath != "" {
+		return local.Open(r.LocalPath, repo), true
+	}
+	c, ok := m.checkouts[strings.ToLower(repo)]
+	return c, ok
+}
+
+// assignDir picks where a session runs the first time it starts.
+func (m *Manager) assignDir(s *Session) {
+	repo := s.Event.Repo
+	co, ok := m.checkoutFor(repo)
+	switch {
+	case s.ClaudeID != "":
+		// From before sessions had a Dir. Claude finds a conversation to
+		// resume by its working directory, so stay where it started.
+		if r := m.cfg.Repo(repo); r != nil && r.LocalPath != "" {
+			s.Dir = r.LocalPath
+		} else {
+			s.Dir = m.cfg.CloneDir(repo)
+		}
+	case ok:
+		s.Dir, s.Checkout, s.Remote = m.cfg.WorktreeDir(repo, s.ID), co.Dir, co.Remote
+	default:
+		s.Dir = m.cfg.CloneDir(repo)
+	}
 }
 
 // pump starts queued sessions while slots are free. Sessions for the same
@@ -381,7 +436,10 @@ func (m *Manager) pump() {
 			m.queue = append(m.queue[:i], m.queue[i+1:]...)
 			continue
 		}
-		if m.repoBusy(s.Event.Repo) {
+		if s.Dir == "" {
+			m.assignDir(s)
+		}
+		if m.dirBusy(s.Dir) {
 			i++
 			continue
 		}
@@ -423,17 +481,23 @@ func (m *Manager) execute(id int, p *proc, input string) {
 	m.mu.Lock()
 	s := m.find(id)
 	repo, number, resume, allow := s.Event.Repo, s.Event.Number, s.ClaudeID, s.Allow
+	dir, checkout, remote := s.Dir, s.Checkout, s.Remote
 	m.mu.Unlock()
 
-	dir := m.cfg.WorkDir(repo)
-	if resume == "" {
-		if err := m.prepareWorkdir(id, repo, dir); err != nil {
-			m.fail(id, fmt.Sprintf("preparing %s: %v", dir, err))
-			return
-		}
+	var err error
+	switch {
+	case checkout != "":
+		// Also after a resume, in case the worktree was cleaned up.
+		err = m.prepareWorktree(id, checkout, remote, dir)
+	case resume == "":
+		err = m.prepareWorkdir(id, repo, dir)
+	}
+	if err != nil {
+		m.fail(id, fmt.Sprintf("preparing %s: %v", dir, err))
+		return
 	}
 
-	err := m.runClaude(id, p, dir, repo, number, resume, allow, input)
+	err = m.runClaude(id, p, dir, repo, number, resume, allow, checkout != "", input)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s = m.find(id)
@@ -466,6 +530,102 @@ func (m *Manager) fail(id int, msg string) {
 	m.notify(Update{SessionID: id})
 }
 
+// prepareWorktree creates a session's worktree from the user's checkout the
+// first time, or again after it was cleaned up. Only fetch and worktree add
+// run in the checkout, so its working tree, branch and changes are untouched.
+func (m *Manager) prepareWorktree(id int, checkout, remote, dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return nil
+	}
+	m.setStatus(id, StatusPreparing, &Line{LineInfo, "fetching " + remote + " in " + checkout})
+	if out, err := m.run(m.ctx, checkout, "git", "fetch", remote, "--prune", "--quiet").CombinedOutput(); err != nil {
+		// Not fatal; the worktree starts from what is already fetched.
+		m.setStatus(id, StatusPreparing, &Line{LineInfo, "git fetch failed: " + oneLine(string(out), 200)})
+	}
+	base := m.baseRef(checkout, remote)
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return err
+	}
+	m.setStatus(id, StatusPreparing, &Line{LineInfo, "creating worktree " + dir + " at " + base})
+	out, err := m.run(m.ctx, checkout, "git", "worktree", "add", "--detach", dir, base).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git worktree add: %v: %s", err, oneLine(string(out), 300))
+	}
+	return nil
+}
+
+// baseRef is the remote's default branch, falling back to the checkout's HEAD.
+func (m *Manager) baseRef(checkout, remote string) string {
+	for _, ref := range []string{remote + "/HEAD", remote + "/main", remote + "/master"} {
+		if m.run(m.ctx, checkout, "git", "rev-parse", "--verify", "--quiet", ref+"^{commit}").Run() == nil {
+			return ref
+		}
+	}
+	return "HEAD"
+}
+
+// removeWorktree deletes a session's worktree. Branches and commits made in
+// it stay in the checkout's repository; uncommitted changes are lost.
+func (m *Manager) removeWorktree(s Session) error {
+	if s.Checkout == "" {
+		return nil
+	}
+	if _, err := os.Stat(s.Dir); err != nil {
+		return nil
+	}
+	out, err := m.run(context.Background(), s.Checkout, "git", "worktree", "remove", "--force", s.Dir).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git worktree remove: %v: %s", err, oneLine(string(out), 300))
+	}
+	return nil
+}
+
+// Delete removes a finished session and its worktree.
+func (m *Manager) Delete(id int) error {
+	m.mu.Lock()
+	i := slices.IndexFunc(m.sessions, func(s *Session) bool { return s.ID == id })
+	switch {
+	case i < 0:
+		m.mu.Unlock()
+		return fmt.Errorf("no session %d", id)
+	case m.sessions[i].Status.Active() || m.sessions[i].Status == StatusQueued:
+		m.mu.Unlock()
+		return errors.New("session is still working; stop it first")
+	}
+	s := *m.sessions[i]
+	m.sessions = slices.Delete(m.sessions, i, i+1)
+	m.mu.Unlock()
+	m.notify(Update{SessionID: id})
+	return m.removeWorktree(s)
+}
+
+// PruneWorktrees removes the worktrees of sessions that finished more than
+// maxAge ago and reports how many it removed. The sessions stay; resuming
+// one creates its worktree again.
+func (m *Manager) PruneWorktrees(maxAge time.Duration) (int, error) {
+	m.mu.Lock()
+	var old []Session
+	for _, s := range m.sessions {
+		if s.Checkout != "" && !s.Status.Active() && s.Status != StatusQueued && time.Since(s.Updated) > maxAge {
+			old = append(old, *s)
+		}
+	}
+	m.mu.Unlock()
+	n := 0
+	var errs []error
+	for _, s := range old {
+		if _, err := os.Stat(s.Dir); err != nil {
+			continue
+		}
+		if err := m.removeWorktree(s); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		n++
+	}
+	return n, errors.Join(errs...)
+}
+
 // prepareWorkdir clones the repo on first use and fetches otherwise.
 func (m *Manager) prepareWorkdir(id int, repo, dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
@@ -490,7 +650,7 @@ func (m *Manager) prepareWorkdir(id int, repo, dir string) error {
 	return nil
 }
 
-func (m *Manager) claudeArgs(repo string, number int, resume string, allow []config.Action) ([]string, error) {
+func (m *Manager) claudeArgs(repo string, number int, resume string, allow []config.Action, worktree bool) ([]string, error) {
 	c := m.cfg.Claude
 	args := []string{
 		"-p",
@@ -498,7 +658,7 @@ func (m *Manager) claudeArgs(repo string, number int, resume string, allow []con
 		"--output-format", "stream-json",
 		"--verbose",
 		"--permission-prompt-tool", "stdio",
-		"--append-system-prompt", prompt.System(allow),
+		"--append-system-prompt", prompt.System(allow, worktree),
 	}
 	if c.PermissionMode != "" {
 		args = append(args, "--permission-mode", c.PermissionMode)
@@ -532,8 +692,8 @@ func (m *Manager) claudeArgs(repo string, number int, resume string, allow []con
 	return append(args, c.ExtraArgs...), nil
 }
 
-func (m *Manager) runClaude(id int, p *proc, dir, repo string, number int, resume string, allow []config.Action, input string) error {
-	args, err := m.claudeArgs(repo, number, resume, allow)
+func (m *Manager) runClaude(id int, p *proc, dir, repo string, number int, resume string, allow []config.Action, worktree bool, input string) error {
+	args, err := m.claudeArgs(repo, number, resume, allow, worktree)
 	if err != nil {
 		return err
 	}

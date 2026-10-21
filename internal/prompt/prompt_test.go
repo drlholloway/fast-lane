@@ -39,13 +39,13 @@ func TestRenderOverride(t *testing.T) {
 }
 
 func TestSystemListsAllowedActions(t *testing.T) {
-	none := System(nil)
+	none := System(nil, false)
 	if !strings.Contains(none, "Ask the user with AskUserQuestion before you push new branches, open pull requests,") ||
 		strings.Contains(none, "You may") {
 		t.Fatalf("with nothing allowed every action should need approval:\n%s", none)
 	}
 
-	some := System([]config.Action{config.ActionEdit, config.ActionPushBranch, config.ActionOpenPR})
+	some := System([]config.Action{config.ActionEdit, config.ActionPushBranch, config.ActionOpenPR}, false)
 	if !strings.Contains(some, "- You may push new branches and open pull requests without asking.") {
 		t.Fatalf("allowed actions missing:\n%s", some)
 	}
@@ -75,5 +75,14 @@ func TestRenderTriggers(t *testing.T) {
 	out, err = Render(cfg, ev, github.Change{Trigger: config.TriggerChecksFailed}, "")
 	if err != nil || out != "fix CI on abc (checks_failed)" {
 		t.Fatalf("configured trigger prompt should win over the default: %q, %v", out, err)
+	}
+}
+
+func TestSystemWorktreeNote(t *testing.T) {
+	if strings.Contains(System(nil, false), "worktree") {
+		t.Fatal("clones should not mention worktrees")
+	}
+	if !strings.Contains(System(nil, true), "gh pr checkout N --branch fast-lane/pr-N") {
+		t.Fatal("worktree sessions should learn how to avoid branch clashes")
 	}
 }

@@ -30,7 +30,7 @@ The screen has four tabs. Switch between them with `1`–`4` or `tab`.
 | Tab | What it shows | Keys |
 | --- | --- | --- |
 | **Events** | Open PRs, issues, Dependabot alerts and code scanning alerts on watched repos. A `●` marks an item that's new or changed since you last acted on it, and a tag such as `[CI failed]` says what changed. | `enter` start Claude (you can edit the instructions first, then `ctrl+s`) · `s` jump to its session · `o` open in browser · `x` dismiss until it changes |
-| **Sessions** | Every Claude session and its live transcript, with status and cost. | `enter` reply to a finished session or answer a pending prompt · `x` stop · `pgup`/`pgdn` scroll · `f` follow |
+| **Sessions** | Every Claude session and its live transcript, with status and cost. | `enter` reply to a finished session or answer a pending prompt · `x` stop · `D` delete a finished session and its worktree · `pgup`/`pgdn` scroll · `f` follow |
 | **Repos** | Your repos, starred repos and repos where you have open PRs. | `space` watch/unwatch · `a` toggle auto-run · `e` choose event kinds and local checkout · `r` edit its rules · `f` cycle filter · `/` search |
 | **Rules** | The [auto rules](#configuration) for the global scope or one watched repo, in the order they're tried, plus the inbox and the repo's auto-run setting. Changes are saved to the config file and apply from the next poll. | `[`/`]` switch scope · `n` new rule · `enter` edit · `d` delete · `J`/`K` reorder · `c` copy the global rules into this repo · `a` toggle the repo's auto-run · `i` cycle the inbox (auto-run, list only, off) |
 
@@ -85,7 +85,13 @@ A rule for one of these keys can also filter, for example `skip_bots` or `skip_l
 - Auto-run acts on one item at most `max_auto_runs` times (default 5), so a fix that keeps failing CI can't loop forever.
 - Claude runs with `--permission-mode manual`, and only read-only tools are pre-approved (`Read`, `Grep`, `Glob`, `git status/diff/log/show`, and `gh pr view/diff/checks`, `gh issue view`, `gh run view/list`, and `gh api --method GET` for API reads). Anything else asks you first, including `gh api` writes.
 - Claude's system prompt tells it to ask before pushing, opening PRs, commenting, labeling, submitting reviews, closing, merging or dismissing alerts, unless an auto rule's `allow` list pre-approves that action. It always asks before pushing to the default branch or force-pushing.
-- Sessions for the same repo run one at a time because they share a working copy. At most `max_concurrent` sessions run overall.
+- Claude never works in your own checkouts. When you have a repo checked out locally (see [Local checkouts](#local-checkouts)), each session gets its own git worktree of it, so your working tree, current branch and uncommitted changes are never touched. Repos without a local checkout are cloned into the workspace, and sessions on the same clone run one at a time. At most `max_concurrent` sessions run overall.
+
+### Local checkouts
+
+Rather than cloning repos you already have, Fast Lane looks for them in `code_dirs` (by default `~/Code`, `~/code`, `~/src`, `~/Projects`, `~/Developer`, `~/dev` and `~/repos`, whichever exist). It searches up to three levels deep and reads each checkout's `.git/config` to see which GitHub repo its remotes point at. It understands SSH, HTTPS and `ssh://` URLs. If there are several matches, a remote named `origin` beats `upstream`, then a folder named after the repo wins, then the shorter path. The scan runs at startup and again on `R`, and repos with a checkout show `local` on the Repos tab. Setting a repo's `local_path` overrides the scan.
+
+Each session runs in its own worktree under `<workspace_dir>/.worktrees/`. It's created from your checkout after a `git fetch`, detached at the remote's default branch. Worktrees share your checkout's objects and branches, so nothing is downloaded again, and anything Claude commits is a branch in your repo. Because worktrees are separate directories, sessions on the same repo can run in parallel. A finished session keeps its worktree for a week, so you can reply and pick up where it left off. After that the worktree is removed at startup, and replying recreates it. `D` on the Sessions tab deletes a session and its worktree right away. Uncommitted changes in a removed worktree are lost; committed branches stay.
 
 ## Configuration
 
@@ -95,6 +101,7 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
 {
   "poll_interval": "2m",
   "workspace_dir": "~/.local/share/fast-lane/workspaces",
+  "code_dirs": ["~/Code", "~/src"],
   "max_concurrent": 2,
   "max_auto_runs": 5,
   "inbox": { "enabled": true, "auto_run": true },
@@ -136,7 +143,9 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
 
 - **`inbox`**: read review requests, mentions and assignments from your notifications (`enabled`), and run Claude on them without asking (`auto_run`). Both default to on. See [Inbox](#inbox).
 - **`max_auto_runs`**: the most times auto-run will start or resume a session for one item. Sessions you start yourself don't count.
-- **`workspace_dir`**: repos without a `local_path` are cloned here with `gh repo clone` on first use and fetched before each new session.
+- **`code_dirs`**: where to look for local checkouts (see [Local checkouts](#local-checkouts)). Set it to `[]` to always clone.
+- **`local_path`** (per repo): the checkout to make worktrees from, when the scan doesn't find the right one.
+- **`workspace_dir`**: repos without a local checkout are cloned here with `gh repo clone` on first use and fetched before each new session. Session worktrees live under `.worktrees/` here.
 - **`permission_mode`**: any mode `claude --permission-mode` accepts (`manual`, `acceptEdits`, `auto`, …). Prompts the mode doesn't settle on its own still come to the TUI.
 - **`prompts`**: override the instructions for a kind (`pull_request`, `issue`, `dependabot_alert`, `code_scanning_alert`) or a kind and trigger (`pull_request:checks_failed`). An auto rule's `prompt` takes precedence. A trigger with no prompt of its own uses its kind's, with a line saying what triggered it. Templates use Go `text/template` and can use:
   - Every item: `.Repo`, `.Number`, `.Title`, `.URL`, `.Author`, `.Bot`, `.Labels`, `.Body`, `.Kind`, `.CreatedAt`, `.UpdatedAt`.
@@ -183,6 +192,7 @@ go test -race ./...
 | `internal/auto` | Matches items and triggers to auto rules and decides what auto-runs |
 | `internal/claude` | Session manager: spawns `claude`, parses stream-json and answers `can_use_tool` control requests |
 | `internal/tui` | Bubble Tea interface |
+| `internal/local` | Finds local checkouts of GitHub repos in `code_dirs` |
 | `internal/config`, `internal/state`, `internal/prompt` | Settings, persistence and prompt templates |
 
 ## License

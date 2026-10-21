@@ -53,6 +53,7 @@ func newTestModel(t *testing.T) (*Model, *fakeGH) {
 		t.Fatal(err)
 	}
 	cfg.WorkspaceDir = filepath.Join(dir, "ws")
+	cfg.CodeDirs = nil // never scan the real home directory
 	st, _ := state.Load(filepath.Join(dir, "state.json"))
 	mgr := claude.NewManager(cfg, "")
 	mgr.SetRunner(func(ctx context.Context, dir, name string, args ...string) *exec.Cmd {
@@ -418,5 +419,21 @@ func TestInboxHonorsRulesAndSwitch(t *testing.T) {
 	run(m2, m2.pollInbox())
 	if len(m2.mgr.Snapshot()) != 0 || len(m2.feed) != 2 || !m2.fresh[pr.Key] {
 		t.Fatalf("with inbox auto_run off, items are only listed: sessions %d, feed %d", len(m2.mgr.Snapshot()), len(m2.feed))
+	}
+}
+
+func TestDeleteFinishedSession(t *testing.T) {
+	m, _ := newTestModel(t)
+	issue := ev(1, config.KindIssue)
+	m.mgr.Restore([]*claude.Session{{ID: 4, Event: issue, Status: claude.StatusIdle, ClaudeID: "c"}})
+	m.st.EventSessions[issue.Key] = 4
+	m.refreshSessions()
+	keys(m, "2", "D")
+	if !strings.Contains(m.View(), "Delete session #4") {
+		t.Fatal("D should ask before deleting")
+	}
+	keys(m, "y")
+	if len(m.mgr.Snapshot()) != 0 || m.hasSession(issue.Key) {
+		t.Fatal("the session and its event link should be gone")
 	}
 }

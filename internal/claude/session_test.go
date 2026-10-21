@@ -15,6 +15,7 @@ import (
 
 	"github.com/drlholloway/fast-lane/internal/config"
 	"github.com/drlholloway/fast-lane/internal/github"
+	"github.com/drlholloway/fast-lane/internal/local"
 )
 
 // TestHelperProcess plays the part of `claude -p` in stream-json mode. It
@@ -92,7 +93,7 @@ func waitFor(t *testing.T, m *Manager, id int, cond func(Session) bool) Session 
 func TestSessionPermissionRoundTrip(t *testing.T) {
 	cfg := config.Default()
 	cfg.WorkspaceDir = t.TempDir()
-	repoDir := cfg.WorkDir("o/r")
+	repoDir := cfg.CloneDir("o/r")
 	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestSessionPermissionRoundTrip(t *testing.T) {
 func TestClaudeArgsAddAllowedActions(t *testing.T) {
 	m := NewManager(config.Default(), "")
 	defer m.Shutdown()
-	args, err := m.claudeArgs("o/r", 3, "", []config.Action{config.ActionPushBranch, config.ActionOpenPR, config.ActionUpdatePR, config.ActionDismissAlert, config.ActionComment})
+	args, err := m.claudeArgs("o/r", 3, "", []config.Action{config.ActionPushBranch, config.ActionOpenPR, config.ActionUpdatePR, config.ActionDismissAlert, config.ActionComment}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +200,7 @@ func TestQueueSerializesSameRepo(t *testing.T) {
 	cfg := config.Default()
 	cfg.MaxConcurrent = 5
 	cfg.WorkspaceDir = t.TempDir()
-	_ = os.MkdirAll(filepath.Join(cfg.WorkDir("o/r"), ".git"), 0o755)
+	_ = os.MkdirAll(filepath.Join(cfg.CloneDir("o/r"), ".git"), 0o755)
 	var calls [][]string
 	m := NewManager(cfg, "")
 	m.SetRunner(fakeRunner(t, &calls))
@@ -251,4 +252,125 @@ func contains(ss []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// gitRunner runs git for real and plays claude with the helper process.
+func gitRunner(t *testing.T) Runner {
+	return func(ctx context.Context, dir, name string, args ...string) *exec.Cmd {
+		switch name {
+		case "git":
+			cmd := exec.CommandContext(ctx, "git", args...)
+			cmd.Dir = dir
+			return cmd
+		case "claude":
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestHelperProcess")
+			cmd.Env = append(os.Environ(), "FASTLANE_HELPER=1")
+			cmd.Dir = dir
+			return cmd
+		}
+		return exec.CommandContext(ctx, "true")
+	}
+}
+
+func git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestWorktreeFromLocalCheckout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	remote, checkout := filepath.Join(root, "remote.git"), filepath.Join(root, "checkout")
+	git(t, root, "init", "--quiet", "--bare", "-b", "main", remote)
+	git(t, root, "init", "--quiet", "-b", "main", checkout)
+	os.WriteFile(filepath.Join(checkout, "a.txt"), []byte("one\n"), 0o644)
+	git(t, checkout, "add", ".")
+	git(t, checkout, "commit", "--quiet", "-m", "first")
+	git(t, checkout, "remote", "add", "origin", remote)
+	git(t, checkout, "push", "--quiet", "origin", "main")
+	// The user is mid-work: on another branch with an uncommitted change.
+	git(t, checkout, "switch", "--quiet", "-c", "my-work")
+	os.WriteFile(filepath.Join(checkout, "a.txt"), []byte("unsaved\n"), 0o644)
+
+	cfg := config.Default()
+	cfg.WorkspaceDir = filepath.Join(root, "ws")
+	cfg.MaxConcurrent = 5
+	m := NewManager(cfg, "")
+	m.SetRunner(gitRunner(t))
+	m.SetCheckouts(map[string]local.Checkout{"o/r": {Dir: checkout, Remote: "origin"}})
+	defer m.Shutdown()
+
+	a, _ := m.Start(github.Event{Repo: "o/r", Kind: config.KindIssue, Number: 1})
+	b, _ := m.Start(github.Event{Repo: "o/r", Kind: config.KindIssue, Number: 2})
+	sa := waitFor(t, m, a, func(s Session) bool { return s.Status == StatusWaiting })
+	waitFor(t, m, b, func(s Session) bool { return s.Status == StatusWaiting })
+
+	if sa.Dir != cfg.WorktreeDir("o/r", a) || sa.Checkout != checkout {
+		t.Fatalf("session should run in its own worktree: %+v", sa)
+	}
+	if got := git(t, sa.Dir, "rev-parse", "HEAD"); got != git(t, checkout, "rev-parse", "origin/main") {
+		t.Fatalf("worktree should start at the remote's default branch, at %s", got)
+	}
+	if git(t, checkout, "branch", "--show-current") != "my-work" || git(t, checkout, "status", "--porcelain") != "M a.txt" {
+		t.Fatal("the user's checkout must be left exactly as it was")
+	}
+
+	if err := m.Respond(sa.Pending[0], Answer{Allow: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, a, func(s Session) bool { return s.Status == StatusIdle })
+
+	// Pruning removes the worktree but keeps the session; resuming makes it again.
+	if n, err := m.PruneWorktrees(0); err != nil || n != 1 {
+		t.Fatalf("prune: %d, %v", n, err)
+	}
+	if _, err := os.Stat(sa.Dir); !os.IsNotExist(err) {
+		t.Fatal("worktree should be gone")
+	}
+	if err := m.Reply(a, "again"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, a, func(s Session) bool { return s.Status == StatusWaiting })
+	if _, err := os.Stat(filepath.Join(sa.Dir, ".git")); err != nil {
+		t.Fatal("resuming should recreate the worktree at the same path")
+	}
+
+	m.Stop(a)
+	waitFor(t, m, a, func(s Session) bool { return s.Status == StatusStopped })
+	if err := m.Delete(a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sa.Dir); !os.IsNotExist(err) {
+		t.Fatal("delete should remove the worktree")
+	}
+	for _, s := range m.Snapshot() {
+		if s.ID == a {
+			t.Fatal("delete should remove the session")
+		}
+	}
+	if err := m.Delete(b); err == nil {
+		t.Fatal("a working session cannot be deleted")
+	}
+}
+
+func TestOldSessionsResumeWhereTheyStarted(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkspaceDir = t.TempDir()
+	m := NewManager(cfg, "")
+	m.SetCheckouts(map[string]local.Checkout{"o/r": {Dir: "/src/r", Remote: "origin"}})
+	defer m.Shutdown()
+	s := &Session{ID: 3, Event: github.Event{Repo: "o/r"}, ClaudeID: "c-3"}
+	m.assignDir(s)
+	if s.Dir != cfg.CloneDir("o/r") || s.Checkout != "" {
+		t.Fatalf("a session from before worktrees must resume in its old directory: %+v", s)
+	}
 }

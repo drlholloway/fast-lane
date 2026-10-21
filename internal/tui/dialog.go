@@ -502,7 +502,9 @@ type kindsDialog struct {
 	width   int
 }
 
-func newKindsDialog(r config.Repo, w int) *kindsDialog {
+// newKindsDialog edits r's watch settings; found is the checkout code_dirs
+// turned up for it, if any.
+func newKindsDialog(r config.Repo, found string, w int) *kindsDialog {
 	en := map[config.EventKind]bool{}
 	for _, k := range r.Events {
 		en[k] = true
@@ -510,6 +512,9 @@ func newKindsDialog(r config.Repo, w int) *kindsDialog {
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.Placeholder = "(clone into workspace)"
+	if found != "" {
+		ti.Placeholder = "(found " + tildify(found) + ")"
+	}
 	ti.SetValue(r.LocalPath)
 	return &kindsDialog{repo: r.FullName, enabled: en, path: ti, width: clamp(w-6, 30, 72)}
 }
@@ -583,7 +588,7 @@ func (d *kindsDialog) view(m *Model) string {
 		pathLine = "  " + pathLine
 	}
 	b.WriteString("\n" + pathLine + "\n")
-	b.WriteString(sMuted.Render("  Claude runs here. Leave empty to clone into the workspace directory.") + "\n")
+	b.WriteString(sMuted.Render("  Sessions work in git worktrees of this checkout. Leave empty to use one found in\n  code_dirs, or to clone into the workspace directory.") + "\n")
 	return sDialog.Width(d.width).Render(b.String())
 }
 

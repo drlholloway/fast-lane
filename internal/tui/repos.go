@@ -9,6 +9,7 @@ import (
 
 	"github.com/drlholloway/fast-lane/internal/config"
 	"github.com/drlholloway/fast-lane/internal/github"
+	"github.com/drlholloway/fast-lane/internal/local"
 )
 
 type repoSource int
@@ -178,7 +179,11 @@ func (m *Model) reposKey(msg tea.KeyMsg) tea.Cmd {
 			m.setStatus(false, "Watch %s first (space)", r.FullName)
 			return nil
 		}
-		m.dialog = newKindsDialog(*rc, m.width)
+		found := ""
+		if co, ok := local.Scan(m.cfg.SearchDirs())[strings.ToLower(r.FullName)]; ok {
+			found = co.Dir
+		}
+		m.dialog = newKindsDialog(*rc, found, m.width)
 	case "r":
 		if m.cfg.Repo(r.FullName) == nil {
 			m.setStatus(false, "Watch %s first (space)", r.FullName)
@@ -233,7 +238,7 @@ func (m *Model) reposView(h int) string {
 		return b.String()
 	}
 	m.repoCursor = clamp(m.repoCursor, 0, len(rows)-1)
-	wFlags := 14
+	wFlags := 20
 	wName := clamp(m.width/3, 20, 45)
 	wDesc := m.width - wName - wFlags - 4
 	start := window(m.repoCursor, h, len(rows))
@@ -245,6 +250,9 @@ func (m *Model) reposView(h int) string {
 			check = sGood.Render("[✓]")
 			if rc.AutoRun {
 				flags = append(flags, sAlert.Render("auto"))
+			}
+			if _, ok := m.mgr.CheckoutFor(r.FullName); ok {
+				flags = append(flags, sGood.Render("local"))
 			}
 			if len(rc.Events) != len(config.AllKinds) {
 				flags = append(flags, sMuted.Render(fmt.Sprintf("%d/%d", len(rc.Events), len(config.AllKinds))))

@@ -198,8 +198,9 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 type Repo struct {
 	// FullName is "owner/name".
 	FullName string `json:"full_name"`
-	// LocalPath is an existing checkout to run Claude in. When empty the repo
-	// is cloned under Config.WorkspaceDir.
+	// LocalPath is an existing checkout to work from, overriding the one
+	// found in CodeDirs. Sessions use git worktrees of it, never the
+	// checkout itself.
 	LocalPath string `json:"local_path,omitempty"`
 	// Events lists which kinds of activity to watch.
 	Events []EventKind `json:"events"`
@@ -401,6 +402,9 @@ type Config struct {
 	MaxConcurrent int      `json:"max_concurrent"`
 	Claude        Claude   `json:"claude"`
 	Inbox         Inbox    `json:"inbox"`
+	// CodeDirs are searched for existing checkouts of repositories, which
+	// sessions use through git worktrees instead of cloning.
+	CodeDirs []string `json:"code_dirs"`
 	// MaxAutoRuns caps how many times triggers may auto-run Claude on one
 	// item, so a fix that keeps failing CI cannot loop forever.
 	MaxAutoRuns int `json:"max_auto_runs"`
@@ -434,6 +438,7 @@ func Default() *Config {
 		MaxConcurrent: 2,
 		MaxAutoRuns:   5,
 		Inbox:         Inbox{Enabled: true, AutoRun: true},
+		CodeDirs:      []string{"~/Code", "~/code", "~/src", "~/Projects", "~/Developer", "~/dev", "~/repos"},
 		Claude: Claude{
 			Path:           "claude",
 			PermissionMode: "manual",
@@ -563,12 +568,23 @@ func (c *Config) RulesFor(r Repo) map[RuleKey]Rules {
 	return nil
 }
 
-// WorkDir returns the directory Claude should run in for fullName.
-func (c *Config) WorkDir(fullName string) string {
-	if r := c.Repo(fullName); r != nil && r.LocalPath != "" {
-		return r.LocalPath
+// SearchDirs returns CodeDirs with ~ expanded.
+func (c *Config) SearchDirs() []string {
+	out := make([]string, len(c.CodeDirs))
+	for i, d := range c.CodeDirs {
+		out[i] = expandHome(d)
 	}
+	return out
+}
+
+// CloneDir is where fullName is cloned when there is no local checkout.
+func (c *Config) CloneDir(fullName string) string {
 	return filepath.Join(c.WorkspaceDir, filepath.FromSlash(fullName))
+}
+
+// WorktreeDir is where session id's worktree of fullName goes.
+func (c *Config) WorktreeDir(fullName string, id int) string {
+	return filepath.Join(c.WorkspaceDir, ".worktrees", filepath.FromSlash(fullName), fmt.Sprintf("session-%d", id))
 }
 
 func configHome() string {

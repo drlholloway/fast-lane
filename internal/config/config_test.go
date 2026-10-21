@@ -55,15 +55,18 @@ func TestSaveRoundTrip(t *testing.T) {
 	}
 }
 
-func TestWorkDir(t *testing.T) {
+func TestCloneAndWorktreeDir(t *testing.T) {
 	cfg := Default()
 	cfg.WorkspaceDir = "/ws"
-	if got := cfg.WorkDir("o/r"); got != filepath.FromSlash("/ws/o/r") {
+	if got := cfg.CloneDir("o/r"); got != filepath.FromSlash("/ws/o/r") {
 		t.Fatalf("got %s", got)
 	}
-	cfg.Watch("o/r").LocalPath = "/src/r"
-	if got := cfg.WorkDir("o/r"); got != "/src/r" {
+	if got := cfg.WorktreeDir("o/r", 7); got != filepath.FromSlash("/ws/.worktrees/o/r/session-7") {
 		t.Fatalf("got %s", got)
+	}
+	cfg.CodeDirs = []string{"~/Code", "/abs"}
+	if got := cfg.SearchDirs(); got[0] == "~/Code" || got[1] != "/abs" {
+		t.Fatalf("~ should expand: %v", got)
 	}
 }
 

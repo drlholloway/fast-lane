@@ -85,10 +85,47 @@ func (m *Model) sessionsKey(msg tea.KeyMsg) tea.Cmd {
 			m.mgr.Stop(id)
 			return nil
 		}, m.width)
+	case "D":
+		if s.Status.Active() || s.Status == claude.StatusQueued {
+			m.setStatus(false, "Stop the session first (x)")
+			return nil
+		}
+		id := s.ID
+		msg := fmt.Sprintf("Delete session #%d on %s and its transcript?", id, s.Event.Repo)
+		if s.Checkout != "" {
+			msg += "\nIts worktree is removed too; uncommitted changes in it are lost, committed branches stay in " + tildify(s.Checkout) + "."
+		}
+		m.dialog = newConfirmDialog(msg, func(m *Model) tea.Cmd {
+			err := m.mgr.Delete(id)
+			for k, v := range m.st.EventSessions {
+				if v == id {
+					delete(m.st.EventSessions, k)
+				}
+			}
+			delete(m.pending, id)
+			m.refreshSessions()
+			if err != nil {
+				m.setStatus(true, "Deleted session #%d, but: %v", id, err)
+			} else {
+				m.setStatus(false, "Deleted session #%d", id)
+			}
+			return nil
+		}, m.width)
 	case "o":
 		return m.open(s.Event.URL)
 	}
 	return nil
+}
+
+// sessionDir says where s runs, or will run once it starts.
+func (m *Model) sessionDir(s claude.Session) string {
+	if s.Dir == "" {
+		return m.location(s.Event.Repo)
+	}
+	if s.Checkout != "" {
+		return tildify(s.Dir) + " (worktree of " + tildify(s.Checkout) + ")"
+	}
+	return tildify(s.Dir)
 }
 
 func (m *Model) updateTranscript() {
@@ -172,7 +209,7 @@ func (m *Model) sessionsView(h int) string {
 		started += " ago"
 	}
 	sub := sMuted.Render(fit(fmt.Sprintf("%s · %s #%d · started %s · %s", s.Event.Repo, s.Event.Kind.Short(),
-		s.Event.Number, started, m.cfg.WorkDir(s.Event.Repo)), m.transcript.Width))
+		s.Event.Number, started, m.sessionDir(s)), m.transcript.Width))
 	right := head + "\n" + sub + "\n" + m.transcript.View()
 
 	if narrow {

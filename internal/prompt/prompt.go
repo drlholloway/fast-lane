@@ -13,8 +13,9 @@ import (
 )
 
 // System returns the text appended to Claude's system prompt for a session
-// that may take the allowed actions without asking.
-func System(allow []config.Action) string {
+// that may take the allowed actions without asking. worktree says the
+// session runs in a git worktree of the user's own checkout.
+func System(allow []config.Action, worktree bool) string {
 	var may, ask []string
 	for _, a := range config.AllActions {
 		switch d := a.Describe(); {
@@ -28,7 +29,12 @@ func System(allow []config.Action) string {
 	var b strings.Builder
 	b.WriteString(`You are running inside Fast Lane, a terminal app that hands you GitHub maintenance work while the user does other things.
 The working directory is a local clone of the repository. Use the gh CLI for GitHub operations.
-Read from the GitHub API with gh api --method GET; other gh api calls need the user's approval unless an allowed action covers them.
+`)
+	if worktree {
+		b.WriteString(`It is a git worktree of the user's own checkout and shares its branches. If git or gh pr checkout refuses a branch because it is checked out in another worktree, check it out under another name (gh pr checkout N --branch fast-lane/pr-N) and push with git push REMOTE HEAD:BRANCH.
+`)
+	}
+	b.WriteString(`Read from the GitHub API with gh api --method GET; other gh api calls need the user's approval unless an allowed action covers them.
 When you need a decision, use the AskUserQuestion tool; the user will answer in Fast Lane's dialog box.
 These rules override the task instructions:
 `)

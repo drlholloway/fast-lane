@@ -21,6 +21,7 @@ import (
 	"github.com/drlholloway/fast-lane/internal/claude"
 	"github.com/drlholloway/fast-lane/internal/config"
 	"github.com/drlholloway/fast-lane/internal/github"
+	"github.com/drlholloway/fast-lane/internal/local"
 	"github.com/drlholloway/fast-lane/internal/prompt"
 	"github.com/drlholloway/fast-lane/internal/state"
 )
@@ -38,11 +39,12 @@ var tabNames = []string{"Events", "Sessions", "Repos", "Rules"}
 
 type (
 	loadedMsg struct {
-		login   string
-		repos   []github.Repo
-		starred []github.Repo
-		myPRs   []github.Event
-		err     error
+		login     string
+		checkouts map[string]local.Checkout
+		repos     []github.Repo
+		starred   []github.Repo
+		myPRs     []github.Event
+		err       error
 	}
 	polledMsg struct {
 		repo   string
@@ -58,6 +60,10 @@ type (
 	refreshTickMsg time.Time
 	sessionMsg     claude.Update
 	openedMsg      struct{ err error }
+	prunedMsg      struct {
+		n   int
+		err error
+	}
 )
 
 // Model is the root Bubble Tea model.
@@ -117,6 +123,9 @@ type Model struct {
 
 // New builds the root model.
 func New(cfg *config.Config, st *state.State, gh github.Client, mgr *claude.Manager) *Model {
+	// Scanning takes milliseconds; do it before any session can start so
+	// the first ones already use local checkouts.
+	mgr.SetCheckouts(local.Scan(cfg.SearchDirs()))
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = sGood
@@ -148,7 +157,33 @@ func openURL(url string) error {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.load(), m.waitSession(), refreshTick(), m.pollAll())
+	return tea.Batch(m.spinner.Tick, m.load(), m.waitSession(), refreshTick(), m.pollAll(), m.pruneWorktrees())
+}
+
+// worktreeMaxAge is how long a finished session keeps its worktree.
+const worktreeMaxAge = 7 * 24 * time.Hour
+
+func (m *Model) pruneWorktrees() tea.Cmd {
+	mgr := m.mgr
+	return func() tea.Msg {
+		n, err := mgr.PruneWorktrees(worktreeMaxAge)
+		return prunedMsg{n: n, err: err}
+	}
+}
+
+// location says where sessions on repo run.
+func (m *Model) location(repo string) string {
+	if co, ok := m.mgr.CheckoutFor(repo); ok {
+		return "a worktree of " + tildify(co.Dir)
+	}
+	return tildify(m.cfg.CloneDir(repo))
+}
+
+func tildify(p string) string {
+	if h, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, h+string(os.PathSeparator)) {
+		return "~" + p[len(h):]
+	}
+	return p
 }
 
 func refreshTick() tea.Cmd {
@@ -161,11 +196,12 @@ func (m *Model) waitSession() tea.Cmd {
 }
 
 func (m *Model) load() tea.Cmd {
-	gh := m.gh
+	gh, dirs := m.gh, m.cfg.SearchDirs()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		var msg loadedMsg
+		msg.checkouts = local.Scan(dirs)
 		msg.login, msg.err = gh.CurrentUser(ctx)
 		if msg.err != nil {
 			return msg
@@ -252,6 +288,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 
 	case loadedMsg:
+		m.mgr.SetCheckouts(msg.checkouts)
 		m.loading = false
 		m.loadErr = msg.err
 		if msg.err != nil {
@@ -289,6 +326,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.status != "" && !m.statusErr && time.Since(m.statusAt) > 8*time.Second {
 			m.status = ""
+		}
+
+	case prunedMsg:
+		switch {
+		case msg.err != nil:
+			m.setStatus(true, "Could not clean up worktrees: %v", msg.err)
+		case msg.n > 0:
+			m.setStatus(false, "Removed %d worktree(s) of sessions idle over a week", msg.n)
 		}
 
 	case openedMsg:
@@ -839,7 +884,7 @@ func (m *Model) footerView() string {
 	case m.tab == tabEvents:
 		help = helpLine("enter", "run Claude", "s", "session", "o", "open", "x", "dismiss", "R", "refresh", "?", "help", "q", "quit")
 	case m.tab == tabSessions:
-		help = helpLine("enter", "reply/answer", "x", "stop", "o", "open", "pgup/pgdn", "scroll", "?", "help", "q", "quit")
+		help = helpLine("enter", "reply/answer", "x", "stop", "D", "delete", "o", "open", "pgup/pgdn", "scroll", "?", "help", "q", "quit")
 	case m.tab == tabRepos:
 		help = helpLine("space", "watch", "a", "auto-run", "e", "events", "r", "rules", "f", "source", "/", "filter", "?", "help", "q", "quit")
 	case m.tab == tabRules:
