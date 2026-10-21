@@ -101,6 +101,8 @@ type Model struct {
 
 	dialog   dialog
 	deferred map[string]bool
+	// pending holds changes for sessions that were busy, by session ID.
+	pending map[int]pendingRun
 }
 
 // New builds the root model.
@@ -124,6 +126,7 @@ func New(cfg *config.Config, st *state.State, gh github.Client, mgr *claude.Mana
 		fresh:    map[string]bool{},
 		pollErrs: map[string]string{},
 		deferred: map[string]bool{},
+		pending:  map[int]pendingRun{},
 		follow:   true,
 		started:  time.Now(),
 		sessions: mgr.Snapshot(),
@@ -229,6 +232,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionMsg:
 		m.refreshSessions()
+		m.deliverPending()
 		cmds = append(cmds, m.waitSession())
 		if msg.NeedsUser {
 			cmds = append(cmds, bell)
@@ -237,6 +241,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshTickMsg:
 		m.refreshSessions()
+		m.deliverPending()
 		cmds = append(cmds, refreshTick(), m.maybeOpenPending())
 		if m.dirty {
 			m.save()
@@ -291,7 +296,8 @@ func (m *Model) save() {
 	m.dirty = false
 }
 
-// onPolled merges fresh events and auto-starts sessions for new ones.
+// onPolled merges fresh events, detects what changed on known ones, and
+// starts or resumes sessions for changes that auto-run.
 func (m *Model) onPolled(msg polledMsg) tea.Cmd {
 	m.polling--
 	if msg.err != nil {
@@ -306,23 +312,31 @@ func (m *Model) onPolled(msg polledMsg) tea.Cmd {
 	}
 	m.events[strings.ToLower(msg.repo)] = msg.events
 	now := time.Now()
-	newCount, started, filtered := 0, 0, 0
+	changed, started, filtered, capped := 0, 0, 0, 0
 	for _, ev := range msg.events {
-		if !m.st.Observe(ev.Repo, ev.Key, now) {
+		changes := m.changesFor(ev, now)
+		if len(changes) == 0 {
 			continue
 		}
-		newCount++
+		changed++
 		m.fresh[ev.Key] = true
-		if rc.AutoRun && !auto.Match(m.cfg, *rc, ev) {
-			filtered++
+		delete(m.st.Dismissed, ev.Key)
+		if !rc.AutoRun {
 			continue
 		}
-		if rc.AutoRun && !m.hasSession(ev.Key) {
-			if err := m.startSession(ev); err != nil {
-				m.setStatus(true, "Auto-run %s failed: %v", ev.Key, err)
-			} else {
-				started++
+		c, rule, ok := m.autoChange(*rc, ev, changes)
+		switch {
+		case !ok:
+			filtered++
+		case m.st.AutoRuns[ev.Key] >= m.cfg.MaxAutoRuns:
+			capped++
+		default:
+			if err := m.runChange(ev, c, rule); err != nil {
+				m.setStatus(true, "Auto-run %s (%s) failed: %v", ev.Key, c.Trigger, err)
+				continue
 			}
+			m.st.AutoRuns[ev.Key]++
+			started++
 		}
 	}
 	if msg.err == nil {
@@ -330,21 +344,114 @@ func (m *Model) onPolled(msg polledMsg) tea.Cmd {
 	}
 	m.dirty = true
 	m.rebuildFeed()
-	skipped := ""
+	if changed == 0 {
+		return nil
+	}
+	text := fmt.Sprintf("%s: %d new or changed", msg.repo, changed)
+	if started > 0 {
+		text += fmt.Sprintf(", ran Claude on %d", started)
+	}
 	if filtered > 0 {
-		skipped = fmt.Sprintf(", %d didn't match auto rules", filtered)
+		text += fmt.Sprintf(", %d didn't match auto rules", filtered)
 	}
+	if capped > 0 {
+		text += fmt.Sprintf(", %d reached max_auto_runs", capped)
+	}
+	m.setStatus(false, "%s", text)
+	if started == changed {
+		return nil
+	}
+	return bell
+}
+
+// changesFor records ev's snapshot and returns the changes that fire: opened
+// for an item first seen after its repo's baseline, otherwise whatever
+// Detect finds since the last poll, minus changes that already fired.
+func (m *Model) changesFor(ev github.Event, now time.Time) []github.Change {
+	isNew := m.st.Observe(ev.Repo, ev.Key, now)
+	prev, had := m.st.Snapshots[ev.Key]
+	var changes []github.Change
 	switch {
-	case started > 0:
-		m.setStatus(false, "%s: %d new, started %d Claude session(s)%s", msg.repo, newCount, started, skipped)
-	case filtered > 0:
-		m.setStatus(false, "%s: %d new event(s)%s", msg.repo, newCount, skipped)
-		return bell
-	case newCount > 0:
-		m.setStatus(false, "%s: %d new event(s)", msg.repo, newCount)
-		return bell
+	case isNew:
+		changes = []github.Change{github.Opened(ev)}
+	case had && m.login == "":
+		// Until we know who the user is we cannot ignore their own activity,
+		// so keep the old snapshot and compare on the next poll.
+		return nil
+	case had:
+		changes = github.Detect(prev, ev, m.login)
 	}
+	m.st.Snapshots[ev.Key] = ev.Snapshot()
+	var out []github.Change
+	for _, c := range changes {
+		if m.st.Fire(ev.Key, c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// autoChange picks the first change, in trigger order, that has a rule.
+func (m *Model) autoChange(rc config.Repo, ev github.Event, changes []github.Change) (github.Change, config.Rule, bool) {
+	for _, c := range changes {
+		if rule, ok := auto.RuleFor(m.cfg, rc, ev, c.Trigger); ok {
+			return c, rule, true
+		}
+	}
+	return github.Change{}, config.Rule{}, false
+}
+
+// pendingRun is a change waiting for its session to finish a turn.
+type pendingRun struct {
+	text  string
+	allow []config.Action
+}
+
+// runChange acts on change c. It resumes the item's last session so Claude
+// keeps what it learned, or starts one when there is none to resume. A
+// session that is still working gets the change when it finishes its turn.
+func (m *Model) runChange(ev github.Event, c github.Change, rule config.Rule) error {
+	text, err := prompt.Render(m.cfg, ev, c, rule.Prompt)
+	if err != nil {
+		return err
+	}
+	s, ok := m.sessionFor(ev.Key)
+	switch {
+	case !ok || s.ClaudeID == "":
+		return m.startSessionWithPrompt(ev, text, rule.Allow)
+	case s.Status.Active() || s.Status == claude.StatusQueued:
+		m.pending[s.ID] = pendingRun{text: text, allow: rule.Allow}
+	default:
+		if err := m.mgr.Resume(s.ID, text, rule.Allow); err != nil {
+			return err
+		}
+		m.refreshSessions()
+	}
+	delete(m.fresh, ev.Key)
 	return nil
+}
+
+// deliverPending resumes sessions that finished their turn with a change
+// waiting. Changes for sessions the user stopped are dropped.
+func (m *Model) deliverPending() {
+	for id, p := range m.pending {
+		var s claude.Session
+		for _, x := range m.sessions {
+			if x.ID == id {
+				s = x
+			}
+		}
+		switch {
+		case s.ID == 0 || s.Status == claude.StatusStopped:
+			delete(m.pending, id)
+		case s.Status.Active() || s.Status == claude.StatusQueued:
+		default:
+			delete(m.pending, id)
+			if err := m.mgr.Resume(id, p.text, p.allow); err != nil {
+				m.setStatus(true, "Could not resume session %d: %v", id, err)
+			}
+		}
+	}
 }
 
 func (m *Model) hasSession(key string) bool {
@@ -373,24 +480,20 @@ func (m *Model) sessionFor(key string) (claude.Session, bool) {
 	return claude.Session{}, false
 }
 
-func (m *Model) startSession(ev github.Event) error {
-	rule := m.ruleFor(ev)
-	text, err := prompt.Render(m.cfg, ev, rule.Prompt)
-	if err != nil {
-		return err
+// manualChange returns the change and rule a session started by hand should
+// use: the item's last change, or opened, and whatever rule governs it.
+// Rules shape manual sessions too, not only auto-run ones.
+func (m *Model) manualChange(ev github.Event) (github.Change, config.Rule) {
+	c, ok := m.st.LastChange[ev.Key]
+	if !ok {
+		c = github.Opened(ev)
 	}
-	return m.startSessionWithPrompt(ev, text, rule.Allow)
-}
-
-// ruleFor returns the auto rule that governs ev, or the zero rule when none
-// does. Rules shape manual sessions too, not only auto-run ones.
-func (m *Model) ruleFor(ev github.Event) config.Rule {
 	rc := m.cfg.Repo(ev.Repo)
 	if rc == nil {
-		return config.Rule{}
+		return c, config.Rule{}
 	}
-	rule, _ := auto.RuleFor(m.cfg, *rc, ev)
-	return rule
+	rule, _ := auto.RuleFor(m.cfg, *rc, ev, c.Trigger)
+	return c, rule
 }
 
 func (m *Model) startSessionWithPrompt(ev github.Event, text string, allow []config.Action) error {

@@ -50,6 +50,19 @@ type Event struct {
 	Draft     bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	// Pull request state, empty for other kinds. Checks is the head commit's
+	// combined status (SUCCESS, FAILURE, ERROR, PENDING) and Mergeable one of
+	// MERGEABLE, CONFLICTING or UNKNOWN.
+	HeadSHA        string
+	HeadAuthor     string
+	Checks         string
+	Mergeable      string
+	ReviewDecision string
+	ReviewRequests []string
+	// LastComment and LastReview are the newest of each, by anyone.
+	LastComment Activity
+	LastReview  Activity
 }
 
 // EventKey builds the stable identifier of an event.
@@ -69,7 +82,8 @@ type Client interface {
 
 // REST implements Client with go-gh, which reuses the gh CLI's auth.
 type REST struct {
-	c *api.RESTClient
+	c   *api.RESTClient
+	gql *api.GraphQLClient
 }
 
 // NewREST returns a client authenticated as the gh CLI user.
@@ -78,7 +92,11 @@ func NewREST() (*REST, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gh auth: %w (run `gh auth login`)", err)
 	}
-	return &REST{c: c}, nil
+	gql, err := api.DefaultGraphQLClient()
+	if err != nil {
+		return nil, fmt.Errorf("gh auth: %w (run `gh auth login`)", err)
+	}
+	return &REST{c: c, gql: gql}, nil
 }
 
 const maxPages = 10
@@ -193,12 +211,8 @@ func (r *REST) FetchEvents(ctx context.Context, repo string, kinds []config.Even
 func (r *REST) fetchKind(ctx context.Context, repo string, k config.EventKind) ([]Event, error) {
 	base := "repos/" + repo
 	switch k {
-	case config.KindPullRequest:
-		items, err := getAll[issueJSON](ctx, r.c, base+"/pulls?state=open&per_page=100")
-		return issuesToEvents(repo, k, items), err
-	case config.KindIssue:
-		items, err := getAll[issueJSON](ctx, r.c, base+"/issues?state=open&per_page=100")
-		return issuesToEvents(repo, k, items), err
+	case config.KindPullRequest, config.KindIssue:
+		return r.fetchGraphQL(ctx, repo, k)
 	case config.KindDependabot:
 		items, err := getAll[dependabotJSON](ctx, r.c, base+"/dependabot/alerts?state=open&per_page=100")
 		out := make([]Event, 0, len(items))
@@ -280,19 +294,6 @@ func (it issueJSON) event(repo string, k config.EventKind) Event {
 		e.Labels = append(e.Labels, l.Name)
 	}
 	return e
-}
-
-// issuesToEvents converts API items, dropping pull requests from the issues
-// endpoint (GitHub returns both there).
-func issuesToEvents(repo string, k config.EventKind, items []issueJSON) []Event {
-	out := make([]Event, 0, len(items))
-	for _, it := range items {
-		if k == config.KindIssue && it.PullRequest != nil {
-			continue
-		}
-		out = append(out, it.event(repo, k))
-	}
-	return out
 }
 
 type dependabotJSON struct {

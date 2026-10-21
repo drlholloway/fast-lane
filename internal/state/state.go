@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/drlholloway/fast-lane/internal/claude"
+	"github.com/drlholloway/fast-lane/internal/github"
 )
 
 // State is saved to disk whenever something changes.
@@ -23,8 +25,16 @@ type State struct {
 	// Dismissed hides events from the feed until they change.
 	Dismissed map[string]time.Time `json:"dismissed"`
 	// EventSessions maps an event key to its most recent session ID.
-	EventSessions map[string]int    `json:"event_sessions"`
-	Sessions      []*claude.Session `json:"sessions"`
+	EventSessions map[string]int `json:"event_sessions"`
+	// Snapshots hold each item's state at the last poll, to detect changes.
+	Snapshots map[string]github.Snapshot `json:"snapshots"`
+	// Fired lists the IDs of changes that already fired on each item.
+	Fired map[string][]string `json:"fired"`
+	// LastChange is the most recent change that fired on each item.
+	LastChange map[string]github.Change `json:"last_change"`
+	// AutoRuns counts sessions started or resumed without asking per item.
+	AutoRuns map[string]int    `json:"auto_runs"`
+	Sessions []*claude.Session `json:"sessions"`
 
 	path string
 }
@@ -58,6 +68,18 @@ func (s *State) init() {
 	}
 	if s.EventSessions == nil {
 		s.EventSessions = map[string]int{}
+	}
+	if s.Snapshots == nil {
+		s.Snapshots = map[string]github.Snapshot{}
+	}
+	if s.Fired == nil {
+		s.Fired = map[string][]string{}
+	}
+	if s.LastChange == nil {
+		s.LastChange = map[string]github.Change{}
+	}
+	if s.AutoRuns == nil {
+		s.AutoRuns = map[string]int{}
 	}
 }
 
@@ -93,6 +115,23 @@ func (s *State) Observe(repo, key string, now time.Time) bool {
 // MarkBaselined records that repo has completed its first poll.
 func (s *State) MarkBaselined(repo string) { s.Baselined[strings.ToLower(repo)] = true }
 
+// maxFired bounds how many change IDs are remembered per item.
+const maxFired = 50
+
+// Fire records change c on key and reports whether it is the first time.
+func (s *State) Fire(key string, c github.Change) bool {
+	if slices.Contains(s.Fired[key], c.ID) {
+		return false
+	}
+	f := append(s.Fired[key], c.ID)
+	if len(f) > maxFired {
+		f = f[len(f)-maxFired:]
+	}
+	s.Fired[key] = f
+	s.LastChange[key] = c
+	return true
+}
+
 // IsDismissed reports whether key was dismissed after its last update.
 func (s *State) IsDismissed(key string, updated time.Time) bool {
 	t, ok := s.Dismissed[key]
@@ -105,6 +144,10 @@ func (s *State) Prune(open map[string]bool, maxAge time.Duration, now time.Time)
 		if !open[k] && now.Sub(t) > maxAge {
 			delete(s.Seen, k)
 			delete(s.Dismissed, k)
+			delete(s.Snapshots, k)
+			delete(s.Fired, k)
+			delete(s.LastChange, k)
+			delete(s.AutoRuns, k)
 		}
 	}
 }

@@ -117,6 +117,8 @@ type Manager struct {
 	run      Runner
 	ctx      context.Context
 	cancel   context.CancelFunc
+	// running tracks execute goroutines so Shutdown can wait for them.
+	running sync.WaitGroup
 }
 
 // NewManager creates a manager that writes raw session logs to logDir.
@@ -203,7 +205,7 @@ func (m *Manager) ActiveCount() int {
 
 // Start queues a new session for ev using its rendered prompt template.
 func (m *Manager) Start(ev github.Event) (int, error) {
-	text, err := prompt.Render(m.cfg, ev, "")
+	text, err := prompt.Render(m.cfg, ev, github.Opened(ev), "")
 	if err != nil {
 		return 0, err
 	}
@@ -227,6 +229,16 @@ func (m *Manager) StartPrompt(ev github.Event, text string, allow []config.Actio
 
 // Reply sends text to a finished session, resuming the conversation.
 func (m *Manager) Reply(id int, text string) error {
+	return m.resume(id, text, nil, false)
+}
+
+// Resume is Reply for a trigger: it also replaces the actions Claude may
+// take without asking.
+func (m *Manager) Resume(id int, text string, allow []config.Action) error {
+	return m.resume(id, text, allow, true)
+}
+
+func (m *Manager) resume(id int, text string, allow []config.Action, setAllow bool) error {
 	m.mu.Lock()
 	s := m.find(id)
 	switch {
@@ -241,6 +253,9 @@ func (m *Manager) Reply(id int, text string) error {
 		return errors.New("session never started, so there is nothing to resume")
 	}
 	s.nextInput = text
+	if setAllow {
+		s.Allow = allow
+	}
 	s.Status = StatusQueued
 	s.Err = ""
 	s.Updated = time.Now()
@@ -319,7 +334,7 @@ func (m *Manager) Stop(id int) {
 	}
 }
 
-// Shutdown kills every running session.
+// Shutdown kills every running session and waits for it to exit.
 func (m *Manager) Shutdown() {
 	m.mu.Lock()
 	m.queue = nil
@@ -334,6 +349,7 @@ func (m *Manager) Shutdown() {
 		p.mu.Unlock()
 	}
 	m.cancel()
+	m.running.Wait()
 }
 
 func (m *Manager) find(id int) *Session {
@@ -376,6 +392,7 @@ func (m *Manager) pump() {
 		s.Updated = time.Now()
 		p := &proc{}
 		m.procs[s.ID] = p
+		m.running.Add(1)
 		go m.execute(s.ID, p, input)
 	}
 }
@@ -394,6 +411,7 @@ func (m *Manager) setStatus(id int, st Status, line *Line) {
 }
 
 func (m *Manager) execute(id int, p *proc, input string) {
+	defer m.running.Done()
 	defer func() {
 		m.mu.Lock()
 		delete(m.procs, id)
@@ -404,7 +422,7 @@ func (m *Manager) execute(id int, p *proc, input string) {
 
 	m.mu.Lock()
 	s := m.find(id)
-	repo, resume, allow := s.Event.Repo, s.ClaudeID, s.Allow
+	repo, number, resume, allow := s.Event.Repo, s.Event.Number, s.ClaudeID, s.Allow
 	m.mu.Unlock()
 
 	dir := m.cfg.WorkDir(repo)
@@ -415,7 +433,7 @@ func (m *Manager) execute(id int, p *proc, input string) {
 		}
 	}
 
-	err := m.runClaude(id, p, dir, repo, resume, allow, input)
+	err := m.runClaude(id, p, dir, repo, number, resume, allow, input)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s = m.find(id)
@@ -472,7 +490,7 @@ func (m *Manager) prepareWorkdir(id int, repo, dir string) error {
 	return nil
 }
 
-func (m *Manager) claudeArgs(repo, resume string, allow []config.Action) ([]string, error) {
+func (m *Manager) claudeArgs(repo string, number int, resume string, allow []config.Action) ([]string, error) {
 	c := m.cfg.Claude
 	args := []string{
 		"-p",
@@ -493,7 +511,7 @@ func (m *Manager) claudeArgs(repo, resume string, allow []config.Action) ([]stri
 	}
 	tools := slices.Clone(c.AllowedTools)
 	for _, a := range allow {
-		for _, t := range a.Tools(repo) {
+		for _, t := range a.Tools(repo, number) {
 			if !slices.Contains(tools, t) {
 				tools = append(tools, t)
 			}
@@ -514,8 +532,8 @@ func (m *Manager) claudeArgs(repo, resume string, allow []config.Action) ([]stri
 	return append(args, c.ExtraArgs...), nil
 }
 
-func (m *Manager) runClaude(id int, p *proc, dir, repo, resume string, allow []config.Action, input string) error {
-	args, err := m.claudeArgs(repo, resume, allow)
+func (m *Manager) runClaude(id int, p *proc, dir, repo string, number int, resume string, allow []config.Action, input string) error {
+	args, err := m.claudeArgs(repo, number, resume, allow)
 	if err != nil {
 		return err
 	}

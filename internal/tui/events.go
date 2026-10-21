@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/drlholloway/fast-lane/internal/claude"
+	"github.com/drlholloway/fast-lane/internal/config"
 	"github.com/drlholloway/fast-lane/internal/github"
 	"github.com/drlholloway/fast-lane/internal/prompt"
 )
@@ -33,8 +34,8 @@ func (m *Model) eventsKey(msg tea.KeyMsg) tea.Cmd {
 			m.jumpToSession(s.ID)
 			return nil
 		}
-		rule := m.ruleFor(ev)
-		text, err := prompt.Render(m.cfg, ev, rule.Prompt)
+		c, rule := m.manualChange(ev)
+		text, err := prompt.Render(m.cfg, ev, c, rule.Prompt)
 		if err != nil {
 			m.setStatus(true, "%v", err)
 			return nil
@@ -125,6 +126,9 @@ func (m *Model) eventsView(h int) string {
 		title := ev.Title
 		if ev.Draft {
 			title = "[draft] " + title
+		}
+		if c, ok := m.st.LastChange[ev.Key]; ok && m.fresh[ev.Key] && c.Trigger != config.TriggerOpened {
+			title = sAlert.Render("["+c.Trigger.Short()+"]") + " " + title
 		}
 		sess := ""
 		if s, ok := m.sessionFor(ev.Key); ok {

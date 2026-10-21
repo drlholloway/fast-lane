@@ -153,7 +153,7 @@ func TestSessionPermissionRoundTrip(t *testing.T) {
 func TestClaudeArgsAddAllowedActions(t *testing.T) {
 	m := NewManager(config.Default(), "")
 	defer m.Shutdown()
-	args, err := m.claudeArgs("o/r", "", []config.Action{config.ActionPushBranch, config.ActionOpenPR, config.ActionUpdatePR, config.ActionDismissAlert})
+	args, err := m.claudeArgs("o/r", 3, "", []config.Action{config.ActionPushBranch, config.ActionOpenPR, config.ActionUpdatePR, config.ActionDismissAlert, config.ActionComment})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,6 +180,9 @@ func TestClaudeArgsAddAllowedActions(t *testing.T) {
 	}
 	if !contains(allow, "Bash(gh api --method PATCH repos/o/r/dependabot/alerts/:*)") {
 		t.Fatalf("dismiss_alert should be scoped to the session's repo: %v", allow)
+	}
+	if !contains(allow, "Bash(gh api --method POST repos/o/r/pulls/3/comments:*)") {
+		t.Fatalf("thread replies should be scoped to the session's PR: %v", allow)
 	}
 	if contains(allow, "Bash(gh api:*)") {
 		t.Fatalf("gh api writes must not be pre-approved by default: %v", allow)

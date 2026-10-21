@@ -151,7 +151,7 @@ func TestAutoRunStartsSessionForNewEvents(t *testing.T) {
 
 func TestAutoRulesFilterNewEvents(t *testing.T) {
 	m, gh := newTestModel(t)
-	m.cfg.AutoRules = map[config.EventKind]config.Rule{config.KindDependabot: {MinSeverity: "high"}}
+	m.cfg.AutoRules = map[config.RuleKey]config.Rule{"dependabot_alert": {MinSeverity: "high"}}
 	m.cfg.Watch("me/app").AutoRun = true
 	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
 
@@ -173,8 +173,8 @@ func TestAutoRulesFilterNewEvents(t *testing.T) {
 
 func TestRulePromptAndActionsShapeSessions(t *testing.T) {
 	m, gh := newTestModel(t)
-	m.cfg.AutoRules = map[config.EventKind]config.Rule{
-		config.KindDependabot: {Prompt: "bump #{{.Number}}", Allow: []config.Action{config.ActionPushBranch, config.ActionOpenPR}},
+	m.cfg.AutoRules = map[config.RuleKey]config.Rule{
+		"dependabot_alert": {Prompt: "bump #{{.Number}}", Allow: []config.Action{config.ActionPushBranch, config.ActionOpenPR}},
 	}
 	m.cfg.Watch("me/app").AutoRun = true
 	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
@@ -224,5 +224,104 @@ func TestPermissionDialogFlow(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "Ship it?") {
 		t.Fatal("question not rendered")
+	}
+}
+
+func failingPR(n int, sha, checks string) github.Event {
+	e := ev(n, config.KindPullRequest)
+	e.HeadSHA, e.HeadAuthor, e.Checks = sha, "amy", checks
+	return e
+}
+
+func TestTriggerStartsSessionOnce(t *testing.T) {
+	m, gh := newTestModel(t)
+	m.login = "me"
+	m.cfg.AutoRules = map[config.RuleKey]config.Rule{
+		"pull_request:checks_failed": {Allow: []config.Action{config.ActionEdit, config.ActionUpdatePR}},
+	}
+	m.cfg.Watch("me/app").AutoRun = true
+	gh.events = []github.Event{failingPR(2, "a1", "SUCCESS")}
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+
+	gh.events = []github.Event{failingPR(2, "a1", "FAILURE")}
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+	ss := m.mgr.Snapshot()
+	if len(ss) != 1 || len(ss[0].Allow) != 2 || !strings.Contains(m.status, "ran Claude on 1") {
+		t.Fatalf("checks failing should start a session with the rule's actions: %+v, status %q", ss, m.status)
+	}
+	key := github.EventKey("me/app", config.KindPullRequest, 2)
+	if m.st.LastChange[key].Trigger != config.TriggerChecksFailed || m.st.AutoRuns[key] != 1 {
+		t.Fatalf("change not recorded: %+v, runs %d", m.st.LastChange[key], m.st.AutoRuns[key])
+	}
+
+	// Still failing on the same commit: nothing new happens.
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+	if len(m.mgr.Snapshot()) != 1 {
+		t.Fatal("the same change must not fire twice")
+	}
+
+	// A new commit that fails again fires again, until max_auto_runs.
+	m.cfg.MaxAutoRuns = 1
+	gh.events = []github.Event{failingPR(2, "a2", "FAILURE")}
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+	if len(m.mgr.Snapshot()) != 1 || !strings.Contains(m.status, "1 reached max_auto_runs") {
+		t.Fatalf("max_auto_runs should stop further runs, status %q", m.status)
+	}
+}
+
+func TestTriggerResumesFinishedSession(t *testing.T) {
+	m, gh := newTestModel(t)
+	m.login = "me"
+	m.cfg.AutoRules = map[config.RuleKey]config.Rule{
+		"pull_request:commented": {Allow: []config.Action{config.ActionComment}},
+	}
+	m.cfg.Watch("me/app").AutoRun = true
+	pr := ev(3, config.KindPullRequest)
+	gh.events = []github.Event{pr}
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+
+	m.mgr.Restore([]*claude.Session{{ID: 7, Event: pr, Status: claude.StatusIdle, ClaudeID: "c-7"}})
+	m.st.EventSessions[pr.Key] = 7
+	m.refreshSessions()
+
+	// My own comment is ignored; someone else's resumes the session.
+	pr.LastComment = github.Activity{ID: "C1", Author: "me", Body: "note to self"}
+	gh.events = []github.Event{pr}
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+	if s := m.mgr.Snapshot()[0]; s.Status != claude.StatusIdle {
+		t.Fatalf("my own comment must not trigger: %+v", s)
+	}
+	pr.LastComment = github.Activity{ID: "C2", Author: "bob", Body: "please rename x"}
+	gh.events = []github.Event{pr}
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+
+	ss := m.mgr.Snapshot()
+	if len(ss) != 1 || ss[0].ID != 7 {
+		t.Fatalf("the change should resume session 7, not start another: %+v", ss)
+	}
+	last := ss[0].Lines[len(ss[0].Lines)-1].Text
+	if !strings.Contains(last, "@bob commented") || !strings.Contains(last, "please rename x") || len(ss[0].Allow) != 1 {
+		t.Fatalf("resume should send the trigger prompt and the rule's actions: %q %v", last, ss[0].Allow)
+	}
+}
+
+func TestBusySessionGetsChangeAfterItsTurn(t *testing.T) {
+	m, _ := newTestModel(t)
+	pr := ev(4, config.KindPullRequest)
+	m.mgr.Restore([]*claude.Session{{ID: 9, Event: pr, Status: claude.StatusIdle, ClaudeID: "c-9"}})
+	m.refreshSessions()
+	m.sessions[0].Status = claude.StatusRunning
+	m.pending[9] = pendingRun{text: "CI failed again", allow: []config.Action{config.ActionUpdatePR}}
+	m.deliverPending()
+	if _, waiting := m.pending[9]; !waiting {
+		t.Fatal("a running session should keep its pending change")
+	}
+	m.refreshSessions()
+	m.deliverPending()
+	if _, waiting := m.pending[9]; waiting {
+		t.Fatal("an idle session should receive its pending change")
+	}
+	if s := m.mgr.Snapshot()[0]; s.Lines[len(s.Lines)-1].Text != "CI failed again" {
+		t.Fatalf("pending change not delivered: %+v", s.Lines)
 	}
 }

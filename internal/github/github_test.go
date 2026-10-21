@@ -17,22 +17,53 @@ func TestNextLink(t *testing.T) {
 	}
 }
 
-func TestIssuesDropPullRequests(t *testing.T) {
-	var items []issueJSON
-	raw := `[{"number":1,"title":"bug","user":{"login":"a","type":"Bot"},"labels":[{"name":"bug"},{"name":"p1"}]},
-	         {"number":2,"title":"pr","pull_request":{}}]`
-	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+func TestSearchItemEvent(t *testing.T) {
+	var it issueJSON
+	raw := `{"number":1,"title":"bug","user":{"login":"a","type":"Bot"},"labels":[{"name":"bug"},{"name":"p1"}],"head":{"ref":"fix"}}`
+	if err := json.Unmarshal([]byte(raw), &it); err != nil {
 		t.Fatal(err)
 	}
-	evs := issuesToEvents("o/r", config.KindIssue, items)
-	if len(evs) != 1 || evs[0].Number != 1 || evs[0].Author != "a" {
-		t.Fatalf("got %+v", evs)
+	e := it.event("o/r", config.KindPullRequest)
+	if !e.Bot || len(e.Labels) != 2 || e.Labels[1] != "p1" || e.Branch != "fix" || e.Key != "o/r:pull_request:1" {
+		t.Fatalf("got %+v", e)
 	}
-	if !evs[0].Bot || len(evs[0].Labels) != 2 || evs[0].Labels[1] != "p1" {
-		t.Fatalf("labels or bot flag not parsed: %+v", evs[0])
+}
+
+func TestGraphQLPullRequestEvent(t *testing.T) {
+	var page pageJSON
+	raw := `{"repository":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[{
+	  "number":4,"title":"Add x","url":"u","body":"b","isDraft":false,
+	  "author":{"login":"renovate","__typename":"Bot"},
+	  "labels":{"nodes":[{"name":"deps"}]},
+	  "headRefName":"renovate/x","headRefOid":"abc","mergeable":"CONFLICTING","reviewDecision":"CHANGES_REQUESTED",
+	  "reviewRequests":{"nodes":[{"requestedReviewer":{"login":"me"}},{"requestedReviewer":{}}]},
+	  "commits":{"nodes":[{"commit":{"author":{"user":{"login":"amy"}},"statusCheckRollup":{"state":"FAILURE"}}}]},
+	  "comments":{"nodes":[{"id":"C1","body":"hi","author":{"login":"bob","__typename":"User"}}]},
+	  "reviews":{"nodes":[{"id":"R1","state":"CHANGES_REQUESTED","body":"needs work","author":{"login":"cat","__typename":"User"},
+	    "comments":{"nodes":[{"body":"rename this","path":"x.go"}]}}]}
+	}]}}}`
+	if err := json.Unmarshal([]byte(raw), &page); err != nil {
+		t.Fatal(err)
 	}
-	if evs[0].Key != "o/r:issue:1" {
-		t.Fatalf("key %q", evs[0].Key)
+	e := page.Repository.Items.Nodes[0].event("o/r", config.KindPullRequest)
+	switch {
+	case e.Author != "renovate[bot]" || !e.Bot:
+		t.Fatalf("bot author should use the REST spelling: %+v", e)
+	case e.HeadSHA != "abc" || e.HeadAuthor != "amy" || e.Checks != "FAILURE" || e.Mergeable != "CONFLICTING":
+		t.Fatalf("PR state not parsed: %+v", e)
+	case len(e.ReviewRequests) != 1 || e.ReviewRequests[0] != "me":
+		t.Fatalf("review requests: %v", e.ReviewRequests)
+	case e.LastComment.ID != "C1" || e.LastComment.Author != "bob":
+		t.Fatalf("last comment: %+v", e.LastComment)
+	case e.LastReview.State != "CHANGES_REQUESTED" || e.LastReview.Body != "needs work\n\nx.go: rename this":
+		t.Fatalf("last review: %+v", e.LastReview)
+	}
+}
+
+func TestGraphQLGhostAuthor(t *testing.T) {
+	e := itemJSON{Number: 1}.event("o/r", config.KindIssue)
+	if e.Author != "ghost" || e.Bot {
+		t.Fatalf("deleted accounts should read as ghost: %+v", e)
 	}
 }
 

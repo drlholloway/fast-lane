@@ -71,14 +71,18 @@ func TestLoadValidatesAutoRules(t *testing.T) {
 	tests := map[string]string{
 		`{"auto_rules":{"dependabot_alert":{"min_severity":"high"}},
 		  "repos":[{"full_name":"o/r","auto_rules":{"pull_request":{"skip_drafts":true,"labels":["bug"]}}}]}`: "",
-		`{"auto_rules":{"pr":{}}}`:                                                           "unknown event kind",
-		`{"auto_rules":{"issue":{"min_severity":"high"}}}`:                                   "only applies to alerts",
-		`{"auto_rules":{"dependabot_alert":{"min_severity":"severe"}}}`:                      "unknown min_severity",
-		`{"auto_rules":{"code_scanning_alert":{"labels":["x"]}}}`:                            "only apply to pull requests",
-		`{"repos":[{"full_name":"o/r","auto_rules":{"issue":{"skip_drafts":true}}}]}`:        "o/r auto_rules",
-		`{"auto_rules":{"issue":{"allow":["comment","label"],"prompt":"Fix #{{.Number}}"}}}`: "",
-		`{"auto_rules":{"issue":{"allow":["push"]}}}`:                                        "unknown action",
-		`{"auto_rules":{"issue":{"prompt":"{{.Number"}}}`:                                    "prompt:",
+		`{"auto_rules":{"pr":{}}}`:                                                                   "unknown event kind",
+		`{"auto_rules":{"issue":{"min_severity":"high"}}}`:                                           "only applies to alerts",
+		`{"auto_rules":{"dependabot_alert":{"min_severity":"severe"}}}`:                              "unknown min_severity",
+		`{"auto_rules":{"code_scanning_alert":{"labels":["x"]}}}`:                                    "only apply to pull requests",
+		`{"repos":[{"full_name":"o/r","auto_rules":{"issue":{"skip_drafts":true}}}]}`:                "o/r auto_rules",
+		`{"auto_rules":{"issue":{"allow":["comment","label"],"prompt":"Fix #{{.Number}}"}}}`:         "",
+		`{"auto_rules":{"issue":{"allow":["push"]}}}`:                                                "unknown action",
+		`{"auto_rules":{"issue":{"prompt":"{{.Number"}}}`:                                            "prompt:",
+		`{"auto_rules":{"pull_request:checks_failed":{"allow":["update_pr"]},"issue:commented":{}}}`: "",
+		`{"auto_rules":{"issue:checks_failed":{}}}`:                                                  "has no trigger",
+		`{"auto_rules":{"issue":{},"issue:opened":{}}}`:                                              "same key",
+		`{"prompts":{"pull_request:conflict":"{{.Number"}}`:                                          "prompts:",
 	}
 	for raw, want := range tests {
 		path := filepath.Join(t.TempDir(), "config.json")
@@ -101,12 +105,37 @@ func TestRulesFor(t *testing.T) {
 	if cfg.RulesFor(r) != nil {
 		t.Fatal("no rules anywhere should return nil")
 	}
-	cfg.AutoRules = map[EventKind]Rule{KindIssue: {}}
-	if _, ok := cfg.RulesFor(r)[KindIssue]; !ok {
+	cfg.AutoRules = map[RuleKey]Rule{"issue": {}}
+	if _, ok := cfg.RulesFor(r)["issue"]; !ok {
 		t.Fatal("repo without rules should inherit the global ones")
 	}
-	r.AutoRules = map[EventKind]Rule{KindPullRequest: {}}
-	if _, ok := cfg.RulesFor(r)[KindIssue]; ok {
+	r.AutoRules = map[RuleKey]Rule{"pull_request": {}}
+	if _, ok := cfg.RulesFor(r)["issue"]; ok {
 		t.Fatal("repo rules should replace the global ones")
+	}
+}
+
+func TestLoadCanonicalizesKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	raw := `{"auto_rules":{"issue:opened":{"labels":["bug"]}},"prompts":{"pull_request:opened":"x"}}`
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.AutoRules["issue"]; !ok {
+		t.Fatalf("issue:opened should be stored as issue: %v", cfg.AutoRules)
+	}
+	if cfg.Prompts["pull_request"] != "x" {
+		t.Fatalf("pull_request:opened should be stored as pull_request: %v", cfg.Prompts)
+	}
+}
+
+func TestActionToolsScope(t *testing.T) {
+	tools := ActionComment.Tools("o/r", 12)
+	if tools[len(tools)-1] != "Bash(gh api --method POST repos/o/r/pulls/12/comments:*)" {
+		t.Fatalf("thread replies should be scoped to the session's PR: %v", tools)
 	}
 }

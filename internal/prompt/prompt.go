@@ -38,6 +38,9 @@ These rules override the task instructions:
 	if len(may) > 0 {
 		fmt.Fprintf(&b, "- You may %s without asking.\n", list(may, "and"))
 	}
+	if slices.Contains(allow, config.ActionComment) {
+		b.WriteString("- Reply in a review thread with gh api --method POST repos/OWNER/REPO/pulls/N/comments/COMMENT_ID/replies -f body=...\n")
+	}
 	if slices.Contains(allow, config.ActionDismissAlert) {
 		b.WriteString("- Dismiss alerts with gh api --method PATCH repos/OWNER/REPO/dependabot/alerts/N or .../code-scanning/alerts/N, giving the reason and a comment.\n")
 	}
@@ -54,9 +57,10 @@ func list(items []string, conj string) string {
 	return strings.Join(items[:len(items)-1], ", ") + " " + conj + " " + items[len(items)-1]
 }
 
-// Defaults holds the built-in template for each event kind.
-var Defaults = map[config.EventKind]string{
-	config.KindPullRequest: `Review pull request #{{.Number}} "{{.Title}}" in {{.Repo}} by @{{.Author}}.
+// Defaults holds the built-in template for each kind and some triggers.
+// Triggers without one use their kind's template.
+var Defaults = map[config.RuleKey]string{
+	"pull_request": `Review pull request #{{.Number}} "{{.Title}}" in {{.Repo}} by @{{.Author}}.
 URL: {{.URL}}
 {{if .Branch}}Branch: {{.Branch}}
 {{end}}
@@ -66,7 +70,7 @@ Write a review covering correctness, tests and risk, and submit it with gh pr re
 Description:
 {{.Body}}`,
 
-	config.KindIssue: `Triage issue #{{.Number}} "{{.Title}}" in {{.Repo}} opened by @{{.Author}}.
+	"issue": `Triage issue #{{.Number}} "{{.Title}}" in {{.Repo}} opened by @{{.Author}}.
 URL: {{.URL}}
 
 Read the issue and its comments with gh issue view --comments, then find the relevant code.
@@ -76,7 +80,7 @@ push the branch and open a pull request. Otherwise add fitting labels and reply 
 Issue body:
 {{.Body}}`,
 
-	config.KindDependabot: `Fix Dependabot alert #{{.Number}} in {{.Repo}}.
+	"dependabot_alert": `Fix Dependabot alert #{{.Number}} in {{.Repo}}.
 URL: {{.URL}}
 Severity: {{.Severity}}
 
@@ -86,7 +90,7 @@ Upgrade the dependency to a patched version on a new branch, update lockfiles, a
 Check whether Dependabot already opened a pull request for this first (gh pr list --author app/dependabot).
 Then push the branch and open a pull request.`,
 
-	config.KindCodeScanning: `Fix code scanning alert #{{.Number}} "{{.Title}}" in {{.Repo}}.
+	"code_scanning_alert": `Fix code scanning alert #{{.Number}} "{{.Title}}" in {{.Repo}}.
 URL: {{.URL}}
 Severity: {{.Severity}}
 
@@ -94,28 +98,97 @@ Severity: {{.Severity}}
 
 Decide whether the finding is real. If it is, fix it on a new branch with a test, push the branch and open a pull request.
 If it looks like a false positive, explain why and dismiss it.`,
+
+	"pull_request:pushed": `New commits were pushed to pull request #{{.Number}} "{{.Title}}" in {{.Repo}}{{if .Actor}} by @{{.Actor}}{{end}}; the head is now {{.HeadSHA}}.
+URL: {{.URL}}
+
+Look at what changed since the last review (gh pr diff, git log), then review the new commits and submit the review with gh pr review.`,
+
+	"pull_request:checks_failed": `CI checks failed on pull request #{{.Number}} "{{.Title}}" in {{.Repo}} at {{.HeadSHA}}.
+URL: {{.URL}}
+
+Find the failing checks with gh pr checks and read their logs with gh run view --log-failed.
+Check out the PR (gh pr checkout {{.Number}}), fix the cause, run the affected tests, and push the fix to the PR branch.
+If the failure is unrelated to the PR (a flaky test, an outage), say so instead of changing code.`,
+
+	"pull_request:conflict": `Pull request #{{.Number}} "{{.Title}}" in {{.Repo}} has merge conflicts with its base branch.
+URL: {{.URL}}
+
+Check out the PR (gh pr checkout {{.Number}}), merge the base branch into it, resolve the conflicts so both sides' intent survives,
+run the build and tests, and push. Merge rather than rebase so the push does not need --force.`,
+
+	"pull_request:changes_requested": `@{{.Actor}} requested changes on pull request #{{.Number}} "{{.Title}}" in {{.Repo}}.
+URL: {{.URL}}
+
+Latest review:
+{{.Detail}}
+
+Read every review comment (gh pr view {{.Number}} --comments, gh api --method GET repos/{{.Repo}}/pulls/{{.Number}}/comments).
+Check out the PR, make the requested changes, run the tests, and push to the PR branch.
+Then reply to each review comment saying what you changed, or why you did not.`,
+
+	"pull_request:commented": `@{{.Actor}} commented on pull request #{{.Number}} "{{.Title}}" in {{.Repo}}.
+URL: {{.URL}}
+
+{{.Detail}}
+
+Respond to it. If it asks for a change, check out the PR, make it, and push to the PR branch. If it asks a question, answer it with a reply.`,
+
+	"issue:commented": `@{{.Actor}} commented on issue #{{.Number}} "{{.Title}}" in {{.Repo}}.
+URL: {{.URL}}
+
+{{.Detail}}
+
+Read the rest of the thread with gh issue view {{.Number}} --comments and respond: answer questions, and if the comment changes what is needed, update your work.`,
 }
 
-// Render builds the prompt for ev. The first template that is set wins:
-// override (usually a rule's prompt), cfg's prompt for the kind, the default.
-func Render(cfg *config.Config, ev github.Event, override string) (string, error) {
-	src, ok := override, override != ""
-	if !ok {
-		src, ok = cfg.Prompts[ev.Kind]
+// Data is what prompt templates see: the event's fields plus the change
+// that triggered the session.
+type Data struct {
+	github.Event
+	Trigger config.Trigger
+	// Actor is who caused the change, when known.
+	Actor string
+	// Detail is the comment or review text, the labels added, or the commit.
+	Detail string
+}
+
+// Render builds the prompt for change c on ev. The first template that is
+// set wins: override (usually a rule's prompt), then cfg's prompt and the
+// built-in one for the kind and trigger, then for the kind alone.
+func Render(cfg *config.Config, ev github.Event, c github.Change, override string) (string, error) {
+	key, kindKey := config.Key(ev.Kind, c.Trigger), config.RuleKey(ev.Kind)
+	src := override
+	if src == "" {
+		src = cfg.Prompts[key]
 	}
-	if !ok || src == "" {
-		src, ok = Defaults[ev.Kind]
-		if !ok {
-			return "", fmt.Errorf("no prompt template for %s", ev.Kind)
+	if src == "" {
+		src = Defaults[key]
+	}
+	fallback := src == "" && key != kindKey
+	if fallback {
+		if src = cfg.Prompts[kindKey]; src == "" {
+			src = Defaults[kindKey]
 		}
 	}
-	tmpl, err := template.New(string(ev.Kind)).Option("missingkey=zero").Parse(src)
+	if src == "" {
+		return "", fmt.Errorf("no prompt template for %s", key)
+	}
+	tmpl, err := template.New(string(key)).Option("missingkey=zero").Parse(src)
 	if err != nil {
-		return "", fmt.Errorf("prompt template for %s: %w", ev.Kind, err)
+		return "", fmt.Errorf("prompt template for %s: %w", key, err)
 	}
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, ev); err != nil {
-		return "", fmt.Errorf("prompt template for %s: %w", ev.Kind, err)
+	if fallback {
+		// A trigger without its own template reuses the kind's; say why.
+		fmt.Fprintf(&buf, "Triggered by: %s", c.Trigger.Short())
+		if c.Detail != "" {
+			fmt.Fprintf(&buf, " (%s)", c.Detail)
+		}
+		buf.WriteString("\n\n")
+	}
+	if err := tmpl.Execute(&buf, Data{Event: ev, Trigger: c.Trigger, Actor: c.Actor, Detail: c.Detail}); err != nil {
+		return "", fmt.Errorf("prompt template for %s: %w", key, err)
 	}
 	return buf.String(), nil
 }

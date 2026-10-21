@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -42,6 +43,111 @@ func (k EventKind) Short() string {
 	return string(k)
 }
 
+// Trigger names a change to an item that can start or resume a session.
+type Trigger string
+
+const (
+	TriggerOpened           Trigger = "opened"
+	TriggerPushed           Trigger = "pushed"
+	TriggerChecksFailed     Trigger = "checks_failed"
+	TriggerConflict         Trigger = "conflict"
+	TriggerChangesRequested Trigger = "changes_requested"
+	TriggerCommented        Trigger = "commented"
+	TriggerReviewRequested  Trigger = "review_requested"
+	TriggerReadyForReview   Trigger = "ready_for_review"
+	TriggerLabeled          Trigger = "labeled"
+)
+
+// Triggers lists the triggers k supports, most important first. When one
+// poll finds several changes on an item, the first that has a matching rule
+// is the one acted on.
+func (k EventKind) Triggers() []Trigger {
+	switch k {
+	case KindPullRequest:
+		return []Trigger{TriggerOpened, TriggerChangesRequested, TriggerChecksFailed, TriggerConflict,
+			TriggerCommented, TriggerReviewRequested, TriggerReadyForReview, TriggerPushed, TriggerLabeled}
+	case KindIssue:
+		return []Trigger{TriggerOpened, TriggerCommented, TriggerLabeled}
+	}
+	return []Trigger{TriggerOpened}
+}
+
+// Short returns a compact label for the trigger.
+func (t Trigger) Short() string {
+	switch t {
+	case TriggerChecksFailed:
+		return "CI failed"
+	case TriggerChangesRequested:
+		return "changes requested"
+	case TriggerReviewRequested:
+		return "review requested"
+	case TriggerReadyForReview:
+		return "ready for review"
+	}
+	return string(t)
+}
+
+// RuleKey keys auto rules and prompts: "kind" for the opened trigger or
+// "kind:trigger" for any other.
+type RuleKey string
+
+// Key returns the canonical RuleKey for kind k and trigger t.
+func Key(k EventKind, t Trigger) RuleKey {
+	if t == TriggerOpened || t == "" {
+		return RuleKey(k)
+	}
+	return RuleKey(string(k) + ":" + string(t))
+}
+
+// Parse splits the key, checking that the kind supports the trigger.
+func (rk RuleKey) Parse() (EventKind, Trigger, error) {
+	k, t, _ := strings.Cut(string(rk), ":")
+	kind := EventKind(k)
+	if !slices.Contains(AllKinds, kind) {
+		return "", "", fmt.Errorf("unknown event kind %q", k)
+	}
+	trig := TriggerOpened
+	if t != "" {
+		trig = Trigger(t)
+	}
+	if !slices.Contains(kind.Triggers(), trig) {
+		return "", "", fmt.Errorf("%s has no trigger %q", kind, t)
+	}
+	return kind, trig, nil
+}
+
+// canonical rewrites keys such as "issue:opened" to "issue", validating each.
+func canonical[V any](m map[RuleKey]V, check func(RuleKey, EventKind, V) error) (map[RuleKey]V, error) {
+	if m == nil {
+		return nil, nil
+	}
+	out := make(map[RuleKey]V, len(m))
+	for rk, v := range m {
+		k, t, err := rk.Parse()
+		if err != nil {
+			return nil, err
+		}
+		key := Key(k, t)
+		if _, dup := out[key]; dup {
+			return nil, fmt.Errorf("%q and %q are the same key", rk, key)
+		}
+		if err := check(key, k, v); err != nil {
+			return nil, err
+		}
+		out[key] = v
+	}
+	return out, nil
+}
+
+func checkRule(key RuleKey, k EventKind, r Rule) error { return r.validate(key, k) }
+
+func checkPrompt(key RuleKey, _ EventKind, src string) error {
+	if _, err := template.New(string(key)).Parse(src); err != nil {
+		return fmt.Errorf("%s: %w", key, err)
+	}
+	return nil
+}
+
 // Duration is a time.Duration that marshals as a human-readable string ("2m").
 type Duration struct{ time.Duration }
 
@@ -72,7 +178,7 @@ type Repo struct {
 	// AutoRun starts a Claude session for new events without asking.
 	AutoRun bool `json:"auto_run"`
 	// AutoRules, when set, replace Config.AutoRules for this repo.
-	AutoRules map[EventKind]Rule `json:"auto_rules,omitempty"`
+	AutoRules map[RuleKey]Rule `json:"auto_rules,omitempty"`
 }
 
 // Rule filters which new events of one kind auto-run. Every field that is set
@@ -121,8 +227,8 @@ var AllActions = []Action{
 	ActionReview, ActionClose, ActionMerge, ActionDismissAlert,
 }
 
-// actionInfo describes each action. "{repo}" in a tool rule is replaced with
-// the session's repository.
+// actionInfo describes each action. "{repo}" and "{number}" in a tool rule
+// are replaced with the session's repository and item number.
 var actionInfo = map[Action]struct {
 	desc  string
 	tools []string
@@ -133,11 +239,13 @@ var actionInfo = map[Action]struct {
 	ActionOpenPR:     {"open pull requests", []string{"Bash(gh pr create:*)"}},
 	ActionUpdatePR: {"update existing pull requests (push commits to their branch, edit their title and description, mark them ready for review)",
 		[]string{"Bash(gh pr checkout:*)", "Bash(git push:*)", "Bash(gh pr edit:*)", "Bash(gh pr ready:*)"}},
-	ActionComment: {"comment on issues and pull requests", []string{"Bash(gh issue comment:*)", "Bash(gh pr comment:*)"}},
-	ActionLabel:   {"add or remove labels", []string{"Bash(gh issue edit:*)", "Bash(gh pr edit:*)"}},
-	ActionReview:  {"submit pull request reviews", []string{"Bash(gh pr review:*)"}},
-	ActionClose:   {"close issues or pull requests", []string{"Bash(gh issue close:*)", "Bash(gh pr close:*)"}},
-	ActionMerge:   {"merge pull requests", []string{"Bash(gh pr merge:*)"}},
+	ActionComment: {"comment on issues and pull requests, including replies in review threads", []string{
+		"Bash(gh issue comment:*)", "Bash(gh pr comment:*)",
+		"Bash(gh api --method POST repos/{repo}/pulls/{number}/comments:*)"}},
+	ActionLabel:  {"add or remove labels", []string{"Bash(gh issue edit:*)", "Bash(gh pr edit:*)"}},
+	ActionReview: {"submit pull request reviews", []string{"Bash(gh pr review:*)"}},
+	ActionClose:  {"close issues or pull requests", []string{"Bash(gh issue close:*)", "Bash(gh pr close:*)"}},
+	ActionMerge:  {"merge pull requests", []string{"Bash(gh pr merge:*)"}},
 	ActionDismissAlert: {"dismiss security alerts", []string{
 		"Bash(gh api --method PATCH repos/{repo}/dependabot/alerts/:*)",
 		"Bash(gh api --method PATCH repos/{repo}/code-scanning/alerts/:*)"}},
@@ -147,20 +255,20 @@ var actionInfo = map[Action]struct {
 // empty for actions that only pre-approve tools.
 func (a Action) Describe() string { return actionInfo[a].desc }
 
-// Tools returns the permission rules the action pre-approves in repo.
-func (a Action) Tools(repo string) []string {
+// Tools returns the permission rules the action pre-approves for item number
+// in repo.
+func (a Action) Tools(repo string, number int) []string {
+	r := strings.NewReplacer("{repo}", repo, "{number}", strconv.Itoa(number))
 	out := make([]string, len(actionInfo[a].tools))
 	for i, t := range actionInfo[a].tools {
-		out[i] = strings.ReplaceAll(t, "{repo}", repo)
+		out[i] = r.Replace(t)
 	}
 	return out
 }
 
-func (r Rule) validate(k EventKind) error {
-	if !slices.Contains(AllKinds, k) {
-		return fmt.Errorf("unknown event kind %q", k)
-	}
-	alert := k == KindDependabot || k == KindCodeScanning
+func (r Rule) validate(key RuleKey, kind EventKind) error {
+	k := key
+	alert := kind == KindDependabot || kind == KindCodeScanning
 	switch {
 	case r.MinSeverity != "" && !alert:
 		return fmt.Errorf("%s: min_severity only applies to alerts", k)
@@ -168,7 +276,7 @@ func (r Rule) validate(k EventKind) error {
 		return fmt.Errorf("%s: unknown min_severity %q", k, r.MinSeverity)
 	case (len(r.Labels) > 0 || len(r.SkipLabels) > 0) && alert:
 		return fmt.Errorf("%s: labels and skip_labels only apply to pull requests and issues", k)
-	case r.SkipDrafts && k != KindPullRequest:
+	case r.SkipDrafts && kind != KindPullRequest:
 		return fmt.Errorf("%s: skip_drafts only applies to pull requests", k)
 	}
 	for _, a := range r.Allow {
@@ -232,13 +340,17 @@ type Config struct {
 	WorkspaceDir  string   `json:"workspace_dir"`
 	MaxConcurrent int      `json:"max_concurrent"`
 	Claude        Claude   `json:"claude"`
-	// Prompts overrides the default prompt template for an event kind.
+	// MaxAutoRuns caps how many times triggers may auto-run Claude on one
+	// item, so a fix that keeps failing CI cannot loop forever.
+	MaxAutoRuns int `json:"max_auto_runs"`
+	// Prompts overrides the default prompt template for a kind or trigger.
 	// Templates use Go text/template syntax; see the README for fields.
-	Prompts map[EventKind]string `json:"prompts,omitempty"`
-	// AutoRules limits auto-run to the kinds listed, filtered by their rule.
-	// When no rules are set anywhere, every new event auto-runs.
-	AutoRules map[EventKind]Rule `json:"auto_rules,omitempty"`
-	Repos     []Repo             `json:"repos"`
+	Prompts map[RuleKey]string `json:"prompts,omitempty"`
+	// AutoRules limits auto-run to the kinds and triggers listed, filtered
+	// by their rule. When no rules are set anywhere, every newly opened item
+	// auto-runs and other triggers never do.
+	AutoRules map[RuleKey]Rule `json:"auto_rules,omitempty"`
+	Repos     []Repo           `json:"repos"`
 
 	path string
 }
@@ -249,6 +361,7 @@ func Default() *Config {
 		PollInterval:  Duration{2 * time.Minute},
 		WorkspaceDir:  filepath.Join(dataHome(), "fast-lane", "workspaces"),
 		MaxConcurrent: 2,
+		MaxAutoRuns:   5,
 		Claude: Claude{
 			Path:           "claude",
 			PermissionMode: "manual",
@@ -256,7 +369,8 @@ func Default() *Config {
 				"Read", "Grep", "Glob",
 				"Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
 				"Bash(gh pr view:*)", "Bash(gh pr diff:*)", "Bash(gh pr checks:*)",
-				"Bash(gh issue view:*)", "Bash(gh api --method GET:*)", "Bash(gh api -X GET:*)",
+				"Bash(gh issue view:*)", "Bash(gh run view:*)", "Bash(gh run list:*)",
+				"Bash(gh api --method GET:*)", "Bash(gh api -X GET:*)",
 			},
 		},
 	}
@@ -282,18 +396,21 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	cfg.WorkspaceDir = expandHome(cfg.WorkspaceDir)
-	for k, r := range cfg.AutoRules {
-		if err := r.validate(k); err != nil {
-			return nil, fmt.Errorf("%s: auto_rules: %w", path, err)
-		}
+	if cfg.Prompts, err = canonical(cfg.Prompts, checkPrompt); err != nil {
+		return nil, fmt.Errorf("%s: prompts: %w", path, err)
+	}
+	if cfg.AutoRules, err = canonical(cfg.AutoRules, checkRule); err != nil {
+		return nil, fmt.Errorf("%s: auto_rules: %w", path, err)
 	}
 	for i := range cfg.Repos {
-		cfg.Repos[i].LocalPath = expandHome(cfg.Repos[i].LocalPath)
-		for k, r := range cfg.Repos[i].AutoRules {
-			if err := r.validate(k); err != nil {
-				return nil, fmt.Errorf("%s: %s auto_rules: %w", path, cfg.Repos[i].FullName, err)
-			}
+		r := &cfg.Repos[i]
+		r.LocalPath = expandHome(r.LocalPath)
+		if r.AutoRules, err = canonical(r.AutoRules, checkRule); err != nil {
+			return nil, fmt.Errorf("%s: %s auto_rules: %w", path, r.FullName, err)
 		}
+	}
+	if cfg.MaxAutoRuns < 1 {
+		cfg.MaxAutoRuns = 1
 	}
 	if cfg.MaxConcurrent < 1 {
 		cfg.MaxConcurrent = 1
@@ -359,7 +476,7 @@ func (c *Config) Unwatch(fullName string) {
 
 // RulesFor returns the auto rules in effect for r: its own when it has any,
 // otherwise the global ones. Nil means every kind auto-runs unfiltered.
-func (c *Config) RulesFor(r Repo) map[EventKind]Rule {
+func (c *Config) RulesFor(r Repo) map[RuleKey]Rule {
 	if len(r.AutoRules) > 0 {
 		return r.AutoRules
 	}

@@ -7,31 +7,37 @@ import (
 	"github.com/drlholloway/fast-lane/internal/github"
 )
 
-func TestMatchWithoutRulesRunsEverything(t *testing.T) {
+func TestRuleForWithoutRules(t *testing.T) {
 	cfg := config.Default()
-	r := config.Repo{FullName: "o/r", AutoRun: true}
-	if !Match(cfg, r, github.Event{Kind: config.KindIssue}) {
-		t.Fatal("auto-run with no rules should match every event")
+	r := config.Repo{FullName: "o/r"}
+	if _, ok := RuleFor(cfg, r, github.Event{Kind: config.KindIssue}, config.TriggerOpened); !ok {
+		t.Fatal("with no rules every opened item should match")
 	}
-	r.AutoRun = false
-	if Match(cfg, r, github.Event{Kind: config.KindIssue}) {
-		t.Fatal("auto-run off must never match")
+	if _, ok := RuleFor(cfg, r, github.Event{Kind: config.KindIssue}, config.TriggerCommented); ok {
+		t.Fatal("with no rules other triggers should not match")
 	}
 }
 
-func TestMatchOnlyRuledKinds(t *testing.T) {
+func TestRuleForOnlyRuledKeys(t *testing.T) {
 	cfg := config.Default()
-	cfg.AutoRules = map[config.EventKind]config.Rule{config.KindDependabot: {}}
-	r := config.Repo{FullName: "o/r", AutoRun: true}
-	if !Match(cfg, r, github.Event{Kind: config.KindDependabot}) {
+	cfg.AutoRules = map[config.RuleKey]config.Rule{
+		"dependabot_alert":           {},
+		"pull_request:checks_failed": {Allow: []config.Action{config.ActionUpdatePR}},
+	}
+	r := config.Repo{FullName: "o/r"}
+	if _, ok := RuleFor(cfg, r, github.Event{Kind: config.KindDependabot}, config.TriggerOpened); !ok {
 		t.Fatal("kind with an empty rule should match")
 	}
-	if Match(cfg, r, github.Event{Kind: config.KindPullRequest}) {
-		t.Fatal("kind without a rule should not match once rules exist")
+	if _, ok := RuleFor(cfg, r, github.Event{Kind: config.KindPullRequest}, config.TriggerOpened); ok {
+		t.Fatal("opened PRs have no rule, so they should not match")
+	}
+	rule, ok := RuleFor(cfg, r, github.Event{Kind: config.KindPullRequest}, config.TriggerChecksFailed)
+	if !ok || len(rule.Allow) != 1 {
+		t.Fatalf("trigger rule should match and be returned: %+v %v", rule, ok)
 	}
 
-	r.AutoRules = map[config.EventKind]config.Rule{config.KindPullRequest: {}}
-	if Match(cfg, r, github.Event{Kind: config.KindDependabot}) || !Match(cfg, r, github.Event{Kind: config.KindPullRequest}) {
+	r.AutoRules = map[config.RuleKey]config.Rule{"pull_request": {}}
+	if _, ok := RuleFor(cfg, r, github.Event{Kind: config.KindDependabot}, config.TriggerOpened); ok {
 		t.Fatal("repo rules should replace the global rules")
 	}
 }
