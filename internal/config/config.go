@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -139,7 +140,14 @@ func canonical[V any](m map[RuleKey]V, check func(RuleKey, EventKind, V) error) 
 	return out, nil
 }
 
-func checkRule(key RuleKey, k EventKind, r Rule) error { return r.validate(key, k) }
+func checkRules(key RuleKey, k EventKind, rs Rules) error {
+	for _, r := range rs {
+		if err := r.validate(key, k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func checkPrompt(key RuleKey, _ EventKind, src string) error {
 	if _, err := template.New(string(key)).Parse(src); err != nil {
@@ -178,7 +186,7 @@ type Repo struct {
 	// AutoRun starts a Claude session for new events without asking.
 	AutoRun bool `json:"auto_run"`
 	// AutoRules, when set, replace Config.AutoRules for this repo.
-	AutoRules map[RuleKey]Rule `json:"auto_rules,omitempty"`
+	AutoRules map[RuleKey]Rules `json:"auto_rules,omitempty"`
 }
 
 // Rule filters which new events of one kind auto-run. Every field that is set
@@ -203,6 +211,29 @@ type Rule struct {
 	Prompt string `json:"prompt,omitempty"`
 	// Allow lists actions Claude may take without asking.
 	Allow []Action `json:"allow,omitempty"`
+}
+
+// Rules are the rules for one key, tried in order; the first that accepts an
+// item governs it. In JSON a single rule may be written as an object.
+type Rules []Rule
+
+func (rs Rules) MarshalJSON() ([]byte, error) {
+	if len(rs) == 1 {
+		return json.Marshal(rs[0])
+	}
+	return json.Marshal([]Rule(rs))
+}
+
+func (rs *Rules) UnmarshalJSON(b []byte) error {
+	if t := bytes.TrimSpace(b); len(t) > 0 && t[0] == '{' {
+		var r Rule
+		if err := json.Unmarshal(b, &r); err != nil {
+			return err
+		}
+		*rs = Rules{r}
+		return nil
+	}
+	return json.Unmarshal(b, (*[]Rule)(rs))
 }
 
 // Action is something Claude can be pre-approved to do in a session.
@@ -349,8 +380,8 @@ type Config struct {
 	// AutoRules limits auto-run to the kinds and triggers listed, filtered
 	// by their rule. When no rules are set anywhere, every newly opened item
 	// auto-runs and other triggers never do.
-	AutoRules map[RuleKey]Rule `json:"auto_rules,omitempty"`
-	Repos     []Repo           `json:"repos"`
+	AutoRules map[RuleKey]Rules `json:"auto_rules,omitempty"`
+	Repos     []Repo            `json:"repos"`
 
 	path string
 }
@@ -399,13 +430,13 @@ func Load(path string) (*Config, error) {
 	if cfg.Prompts, err = canonical(cfg.Prompts, checkPrompt); err != nil {
 		return nil, fmt.Errorf("%s: prompts: %w", path, err)
 	}
-	if cfg.AutoRules, err = canonical(cfg.AutoRules, checkRule); err != nil {
+	if cfg.AutoRules, err = canonical(cfg.AutoRules, checkRules); err != nil {
 		return nil, fmt.Errorf("%s: auto_rules: %w", path, err)
 	}
 	for i := range cfg.Repos {
 		r := &cfg.Repos[i]
 		r.LocalPath = expandHome(r.LocalPath)
-		if r.AutoRules, err = canonical(r.AutoRules, checkRule); err != nil {
+		if r.AutoRules, err = canonical(r.AutoRules, checkRules); err != nil {
 			return nil, fmt.Errorf("%s: %s auto_rules: %w", path, r.FullName, err)
 		}
 	}
@@ -476,7 +507,7 @@ func (c *Config) Unwatch(fullName string) {
 
 // RulesFor returns the auto rules in effect for r: its own when it has any,
 // otherwise the global ones. Nil means every kind auto-runs unfiltered.
-func (c *Config) RulesFor(r Repo) map[RuleKey]Rule {
+func (c *Config) RulesFor(r Repo) map[RuleKey]Rules {
 	if len(r.AutoRules) > 0 {
 		return r.AutoRules
 	}

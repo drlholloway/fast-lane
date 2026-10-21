@@ -151,7 +151,7 @@ func TestAutoRunStartsSessionForNewEvents(t *testing.T) {
 
 func TestAutoRulesFilterNewEvents(t *testing.T) {
 	m, gh := newTestModel(t)
-	m.cfg.AutoRules = map[config.RuleKey]config.Rule{"dependabot_alert": {MinSeverity: "high"}}
+	m.cfg.AutoRules = map[config.RuleKey]config.Rules{"dependabot_alert": {{MinSeverity: "high"}}}
 	m.cfg.Watch("me/app").AutoRun = true
 	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
 
@@ -173,8 +173,8 @@ func TestAutoRulesFilterNewEvents(t *testing.T) {
 
 func TestRulePromptAndActionsShapeSessions(t *testing.T) {
 	m, gh := newTestModel(t)
-	m.cfg.AutoRules = map[config.RuleKey]config.Rule{
-		"dependabot_alert": {Prompt: "bump #{{.Number}}", Allow: []config.Action{config.ActionPushBranch, config.ActionOpenPR}},
+	m.cfg.AutoRules = map[config.RuleKey]config.Rules{
+		"dependabot_alert": {{Prompt: "bump #{{.Number}}", Allow: []config.Action{config.ActionPushBranch, config.ActionOpenPR}}},
 	}
 	m.cfg.Watch("me/app").AutoRun = true
 	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
@@ -236,8 +236,8 @@ func failingPR(n int, sha, checks string) github.Event {
 func TestTriggerStartsSessionOnce(t *testing.T) {
 	m, gh := newTestModel(t)
 	m.login = "me"
-	m.cfg.AutoRules = map[config.RuleKey]config.Rule{
-		"pull_request:checks_failed": {Allow: []config.Action{config.ActionEdit, config.ActionUpdatePR}},
+	m.cfg.AutoRules = map[config.RuleKey]config.Rules{
+		"pull_request:checks_failed": {{Allow: []config.Action{config.ActionEdit, config.ActionUpdatePR}}},
 	}
 	m.cfg.Watch("me/app").AutoRun = true
 	gh.events = []github.Event{failingPR(2, "a1", "SUCCESS")}
@@ -272,8 +272,8 @@ func TestTriggerStartsSessionOnce(t *testing.T) {
 func TestTriggerResumesFinishedSession(t *testing.T) {
 	m, gh := newTestModel(t)
 	m.login = "me"
-	m.cfg.AutoRules = map[config.RuleKey]config.Rule{
-		"pull_request:commented": {Allow: []config.Action{config.ActionComment}},
+	m.cfg.AutoRules = map[config.RuleKey]config.Rules{
+		"pull_request:commented": {{Allow: []config.Action{config.ActionComment}}},
 	}
 	m.cfg.Watch("me/app").AutoRun = true
 	pr := ev(3, config.KindPullRequest)

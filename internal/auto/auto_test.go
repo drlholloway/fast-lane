@@ -20,9 +20,9 @@ func TestRuleForWithoutRules(t *testing.T) {
 
 func TestRuleForOnlyRuledKeys(t *testing.T) {
 	cfg := config.Default()
-	cfg.AutoRules = map[config.RuleKey]config.Rule{
-		"dependabot_alert":           {},
-		"pull_request:checks_failed": {Allow: []config.Action{config.ActionUpdatePR}},
+	cfg.AutoRules = map[config.RuleKey]config.Rules{
+		"dependabot_alert":           {{}},
+		"pull_request:checks_failed": {{Allow: []config.Action{config.ActionUpdatePR}}},
 	}
 	r := config.Repo{FullName: "o/r"}
 	if _, ok := RuleFor(cfg, r, github.Event{Kind: config.KindDependabot}, config.TriggerOpened); !ok {
@@ -36,7 +36,7 @@ func TestRuleForOnlyRuledKeys(t *testing.T) {
 		t.Fatalf("trigger rule should match and be returned: %+v %v", rule, ok)
 	}
 
-	r.AutoRules = map[config.RuleKey]config.Rule{"pull_request": {}}
+	r.AutoRules = map[config.RuleKey]config.Rules{"pull_request": {{}}}
 	if _, ok := RuleFor(cfg, r, github.Event{Kind: config.KindDependabot}, config.TriggerOpened); ok {
 		t.Fatal("repo rules should replace the global rules")
 	}
@@ -69,5 +69,25 @@ func TestAccepts(t *testing.T) {
 		if got := Accepts(tt.rule, tt.ev); got != tt.want {
 			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestRuleForFirstMatchWins(t *testing.T) {
+	cfg := config.Default()
+	cfg.AutoRules = map[config.RuleKey]config.Rules{"pull_request": {
+		{Authors: []string{"dependabot[bot]"}, Allow: []config.Action{config.ActionMerge}},
+		{SkipAuthors: []string{"me"}},
+	}}
+	r := config.Repo{FullName: "o/r"}
+	rule, ok := RuleFor(cfg, r, github.Event{Kind: config.KindPullRequest, Author: "dependabot[bot]"}, config.TriggerOpened)
+	if !ok || len(rule.Allow) != 1 {
+		t.Fatalf("dependabot PR should get the first rule: %+v %v", rule, ok)
+	}
+	rule, ok = RuleFor(cfg, r, github.Event{Kind: config.KindPullRequest, Author: "amy"}, config.TriggerOpened)
+	if !ok || len(rule.Allow) != 0 {
+		t.Fatalf("other PRs should fall through to the second rule: %+v %v", rule, ok)
+	}
+	if _, ok := RuleFor(cfg, r, github.Event{Kind: config.KindPullRequest, Author: "me"}, config.TriggerOpened); ok {
+		t.Fatal("a PR no rule accepts should not match")
 	}
 }

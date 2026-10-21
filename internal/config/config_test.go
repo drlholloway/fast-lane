@@ -105,11 +105,11 @@ func TestRulesFor(t *testing.T) {
 	if cfg.RulesFor(r) != nil {
 		t.Fatal("no rules anywhere should return nil")
 	}
-	cfg.AutoRules = map[RuleKey]Rule{"issue": {}}
+	cfg.AutoRules = map[RuleKey]Rules{"issue": {{}}}
 	if _, ok := cfg.RulesFor(r)["issue"]; !ok {
 		t.Fatal("repo without rules should inherit the global ones")
 	}
-	r.AutoRules = map[RuleKey]Rule{"pull_request": {}}
+	r.AutoRules = map[RuleKey]Rules{"pull_request": {{}}}
 	if _, ok := cfg.RulesFor(r)["issue"]; ok {
 		t.Fatal("repo rules should replace the global ones")
 	}
@@ -137,5 +137,35 @@ func TestActionToolsScope(t *testing.T) {
 	tools := ActionComment.Tools("o/r", 12)
 	if tools[len(tools)-1] != "Bash(gh api --method POST repos/o/r/pulls/12/comments:*)" {
 		t.Fatalf("thread replies should be scoped to the session's PR: %v", tools)
+	}
+}
+
+func TestRulesObjectOrList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	raw := `{"auto_rules":{"issue":{"labels":["bug"]},
+	  "pull_request":[{"authors":["dependabot[bot]"],"allow":["merge"]},{"skip_drafts":true}]}}`
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.AutoRules["issue"]) != 1 || len(cfg.AutoRules["pull_request"]) != 2 {
+		t.Fatalf("got %+v", cfg.AutoRules)
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	if !strings.Contains(string(b), `"issue": {`) || !strings.Contains(string(b), `"pull_request": [`) {
+		t.Fatalf("single rules should save as objects and several as a list:\n%s", b)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"auto_rules":{"pull_request":[{"skip_drafts":true},{"min_severity":"high"}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "only applies to alerts") {
+		t.Fatalf("every rule in a list should be validated, got %v", err)
 	}
 }
