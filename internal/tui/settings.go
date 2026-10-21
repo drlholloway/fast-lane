@@ -15,6 +15,7 @@ import (
 	"github.com/drlholloway/fast-lane/internal/doctor"
 	"github.com/drlholloway/fast-lane/internal/local"
 	"github.com/drlholloway/fast-lane/internal/prompt"
+	"github.com/drlholloway/fast-lane/internal/version"
 )
 
 // The Settings tab checks prerequisites and edits every top-level setting.
@@ -47,6 +48,8 @@ func (m *Model) onChecks(cs checksMsg) {
 
 // setting is one row of the Settings tab.
 type setting struct {
+	// group is the heading the row sits under.
+	group string
 	label string
 	about string
 	value func(m *Model) string
@@ -55,6 +58,13 @@ type setting struct {
 }
 
 var permissionModes = []string{"manual", "acceptEdits", "auto"}
+
+const (
+	repoURL   = "https://github.com/drlholloway/fast-lane"
+	coffeeURL = "https://buymeacoffee.com/drlholloway"
+)
+
+func stripScheme(u string) string { return strings.TrimPrefix(u, "https://") }
 
 func lines(v []string) string { return strings.Join(v, "\n") }
 
@@ -255,6 +265,15 @@ var settings = []setting{
 			m.dialog = newPromptsDialog(m.width)
 			return nil
 		}},
+	{group: "About", label: "Version", about: "The build of Fast Lane you're running. fast-lane -version prints it too.",
+		value: func(m *Model) string { return version.String() },
+		edit:  func(m *Model) tea.Cmd { return nil }},
+	{group: "About", label: "Source", about: "Code, issues and releases. enter opens it in your browser.",
+		value: func(m *Model) string { return stripScheme(repoURL) },
+		edit:  func(m *Model) tea.Cmd { return m.open(repoURL) }},
+	{group: "About", label: "Buy me a coffee", about: "Fast Lane is free. If it saved you time, a coffee keeps it in the fast lane. enter opens it in your browser.",
+		value: func(m *Model) string { return sWarn.Render("☕ ") + stripScheme(coffeeURL) },
+		edit:  func(m *Model) tea.Cmd { return m.open(coffeeURL) }},
 }
 
 func inboxLabel(in config.Inbox) string {
@@ -332,6 +351,10 @@ func (m *Model) settingsView(h int) string {
 	cursorLine := 0
 	m.setCursor = clamp(m.setCursor, 0, len(settings)-1)
 	for i, s := range settings {
+		if i > 0 && s.group != settings[i-1].group {
+			add("")
+			add(sTitle.Render(s.group))
+		}
 		row := "  " + fit(s.label, wLabel) + " " + s.value(m)
 		if i == m.setCursor {
 			cursorLine = len(out)

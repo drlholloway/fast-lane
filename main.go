@@ -16,9 +16,8 @@ import (
 	"github.com/drlholloway/fast-lane/internal/github"
 	"github.com/drlholloway/fast-lane/internal/state"
 	"github.com/drlholloway/fast-lane/internal/tui"
+	"github.com/drlholloway/fast-lane/internal/version"
 )
-
-var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
@@ -32,7 +31,7 @@ func run() error {
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
-		fmt.Println("fast-lane", version)
+		fmt.Println("fast-lane", version.String())
 		return nil
 	}
 

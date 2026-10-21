@@ -182,3 +182,28 @@ func TestManagerGetsConfigCopies(t *testing.T) {
 		t.Fatalf("saving should hand the manager the new config: %+v", co)
 	}
 }
+
+func TestSettingsAbout(t *testing.T) {
+	m, _ := newTestModel(t)
+	var opened []string
+	m.Browse = func(u string) error { opened = append(opened, u); return nil }
+	keys(m, "5")
+	v := m.View()
+	for _, want := range []string{"About", "Version", "buymeacoffee.com/drlholloway", "github.com/drlholloway/fast-lane"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view missing %q:\n%s", want, v)
+		}
+	}
+	m.setCursor = settingIndex(t, "Buy me a coffee")
+	keys(m, "enter")
+	m.setCursor = settingIndex(t, "Source")
+	keys(m, "enter")
+	if len(opened) != 2 || opened[0] != "https://buymeacoffee.com/drlholloway" || opened[1] != "https://github.com/drlholloway/fast-lane" {
+		t.Fatalf("enter should open the links: %v", opened)
+	}
+	m.setCursor = settingIndex(t, "Version")
+	keys(m, "enter")
+	if m.dialog != nil || len(opened) != 2 {
+		t.Fatal("enter on Version does nothing")
+	}
+}
