@@ -214,6 +214,10 @@ type Repo struct {
 	Events []EventKind `json:"events"`
 	// AutoRun starts a Claude session for new events without asking.
 	AutoRun bool `json:"auto_run"`
+	// FullAuto runs every trigger on this repo and lets Claude act on its
+	// own judgment without asking, except to delete or transfer the repo or
+	// destroy its history, which only a human may do. It implies AutoRun.
+	FullAuto bool `json:"full_auto,omitempty"`
 	// AutoRules, when set, replace Config.AutoRules for this repo.
 	AutoRules map[RuleKey]Rules `json:"auto_rules,omitempty"`
 }
@@ -452,6 +456,9 @@ type Inbox struct {
 	// asking. Claude still asks before posting anything unless a rule's
 	// allow list says otherwise.
 	AutoRun bool `json:"auto_run"`
+	// FullAuto runs personal triggers in full auto, on any repo. It implies
+	// AutoRun.
+	FullAuto bool `json:"full_auto,omitempty"`
 }
 
 // Default returns a configuration with sensible defaults.

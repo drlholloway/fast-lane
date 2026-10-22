@@ -110,3 +110,16 @@ func TestNotLoggedIn(t *testing.T) {
 		t.Fatal("notifications are not checked with the inbox off")
 	}
 }
+
+func TestDeleteRepoScopeWithFullAuto(t *testing.T) {
+	gh := fakeGH{auth: github.Auth{Login: "me", Scopes: []string{"repo", "read:org", "delete_repo"}, ScopesKnown: true}}
+	e := env(t, gh, allGood)
+	if byName(Run(context.Background(), e))["GitHub login"].Status != OK {
+		t.Fatal("delete_repo only matters once something runs in full auto")
+	}
+	e.Config.Repos = []config.Repo{{FullName: "o/r", AutoRun: true, FullAuto: true}}
+	got := byName(Run(context.Background(), e))["GitHub login"]
+	if got.Status != Warn || !strings.Contains(got.Fix, "--remove-scopes delete_repo") {
+		t.Fatalf("got %+v", got)
+	}
+}

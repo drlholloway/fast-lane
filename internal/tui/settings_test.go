@@ -85,8 +85,12 @@ func TestSettingsCyclesAndLists(t *testing.T) {
 	}
 	m.setCursor = settingIndex(t, "Inbox")
 	keys(m, "enter")
-	if !m.cfg.Inbox.Enabled || m.cfg.Inbox.AutoRun {
-		t.Fatal("enter should cycle the inbox to list only")
+	if m.dialog == nil || m.cfg.Inbox.FullAuto {
+		t.Fatal("enter on the inbox should ask before full auto")
+	}
+	keys(m, "y")
+	if !m.cfg.Inbox.FullAuto || !strings.Contains(m.View(), "full auto") {
+		t.Fatal("y should put the inbox in full auto")
 	}
 
 	m.setCursor = settingIndex(t, "Allowed tools")

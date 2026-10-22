@@ -161,22 +161,6 @@ func TestRulesRepoScope(t *testing.T) {
 	}
 }
 
-func TestRulesInboxCycle(t *testing.T) {
-	m, _ := newTestModel(t)
-	keys(m, "4", "i")
-	if !m.cfg.Inbox.Enabled || m.cfg.Inbox.AutoRun {
-		t.Fatal("first i: list only")
-	}
-	keys(m, "i")
-	if m.cfg.Inbox.Enabled {
-		t.Fatal("second i: off")
-	}
-	keys(m, "i")
-	if !m.cfg.Inbox.Enabled || !m.cfg.Inbox.AutoRun {
-		t.Fatal("third i: back on with auto-run")
-	}
-}
-
 func TestReposJumpToRules(t *testing.T) {
 	m, _ := newTestModel(t)
 	run(m, m.load())

@@ -122,12 +122,23 @@ func (e *Env) github(ctx context.Context) (Check, string) {
 	if !slices.Contains(a.Scopes, "read:org") && !slices.Contains(a.Scopes, "admin:org") {
 		missing = append(missing, "read:org")
 	}
+	if slices.Contains(a.Scopes, "delete_repo") && e.fullAuto() {
+		c.Status = Warn
+		c.Fix = "Your login can delete repositories. Full auto refuses to, but without this scope GitHub refuses too: " +
+			"run gh auth refresh --remove-scopes delete_repo."
+		return c, a.Login
+	}
 	if len(missing) > 0 {
 		c.Status = Warn
 		c.Fix = "Without repo, private repos, security alerts and notifications are out of reach; without read:org, " +
 			"organization repos may be missing. Run gh auth refresh -s " + strings.Join(missing, ",") + "."
 	}
 	return c, a.Login
+}
+
+// fullAuto reports whether anything runs in full auto.
+func (e *Env) fullAuto() bool {
+	return e.Config.Inbox.FullAuto || slices.ContainsFunc(e.Config.Repos, func(r config.Repo) bool { return r.FullAuto })
 }
 
 func (e *Env) notifications(ctx context.Context, login string) Check {

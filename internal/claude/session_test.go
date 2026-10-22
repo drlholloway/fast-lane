@@ -32,11 +32,16 @@ func TestHelperProcess(t *testing.T) {
 	var first map[string]any
 	_ = json.Unmarshal(in.Bytes(), &first)
 	emit(map[string]any{"type": "system", "subtype": "init", "session_id": "sess-1"})
+	// FASTLANE_HELPER_BASH makes it ask to run that shell command instead.
+	tool, input := "Write", map[string]any{"file_path": "x.txt"}
+	if c := os.Getenv("FASTLANE_HELPER_BASH"); c != "" {
+		tool, input = "Bash", map[string]any{"command": c}
+	}
 	emit(map[string]any{"type": "assistant", "session_id": "sess-1", "message": map[string]any{
-		"content": []any{map[string]any{"type": "tool_use", "name": "Write", "input": map[string]any{"file_path": "x.txt"}}},
+		"content": []any{map[string]any{"type": "tool_use", "name": tool, "input": input}},
 	}})
 	emit(map[string]any{"type": "control_request", "request_id": "r1", "request": map[string]any{
-		"subtype": "can_use_tool", "tool_name": "Write", "input": map[string]any{"file_path": "x.txt"},
+		"subtype": "can_use_tool", "tool_name": tool, "input": input,
 	}})
 	in.Scan()
 	var resp struct {
@@ -155,7 +160,7 @@ func TestSessionPermissionRoundTrip(t *testing.T) {
 func TestClaudeArgsAddAllowedActions(t *testing.T) {
 	m := NewManager(config.Default(), "")
 	defer m.Shutdown()
-	args, err := m.claudeArgs(m.cfg.Claude, "o/r", 3, "", []config.Action{config.ActionPushBranch, config.ActionOpenPR, config.ActionUpdatePR, config.ActionDismissAlert, config.ActionComment}, false)
+	args, err := m.claudeArgs(m.cfg.Claude, "o/r", 3, "", []config.Action{config.ActionPushBranch, config.ActionOpenPR, config.ActionUpdatePR, config.ActionDismissAlert, config.ActionComment}, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +204,7 @@ func TestClaudeArgsAddAllowedActions(t *testing.T) {
 	}
 	c := m.cfg.Claude
 	c.Effort = "medium"
-	withEffort, _ := m.claudeArgs(c, "o/r", 3, "", nil, false)
+	withEffort, _ := m.claudeArgs(c, "o/r", 3, "", nil, false, false)
 	if i := slices.Index(withEffort, "--effort"); i < 0 || withEffort[i+1] != "medium" {
 		t.Fatalf("effort should be passed on: %v", withEffort)
 	}
@@ -471,5 +476,101 @@ func TestSessionEffort(t *testing.T) {
 	waitFor(t, m, id, func(s Session) bool { return len(s.Pending) == 1 })
 	if got := effortArg(lastClaudeCall(calls)); got != "medium" {
 		t.Fatalf("a rule without an effort should fall back to the default: %q", got)
+	}
+}
+
+func fullAutoManager(t *testing.T, bash string) (*Manager, *[][]string) {
+	t.Helper()
+	cfg := config.Default()
+	cfg.WorkspaceDir = t.TempDir()
+	cfg.Claude.PermissionMode = "bypassPermissions"
+	os.MkdirAll(filepath.Join(cfg.CloneDir("o/r"), ".git"), 0o755)
+	var calls [][]string
+	m := NewManager(cfg, "")
+	run := fakeRunner(t, &calls)
+	m.SetRunner(func(ctx context.Context, dir, name string, args ...string) *exec.Cmd {
+		cmd := run(ctx, dir, name, args...)
+		if name == "claude" && bash != "" {
+			cmd.Env = append(cmd.Env, "FASTLANE_HELPER_BASH="+bash)
+		}
+		return cmd
+	})
+	t.Cleanup(m.Shutdown)
+	return m, &calls
+}
+
+func transcript(s Session) string {
+	var b strings.Builder
+	for _, l := range s.Lines {
+		b.WriteString(l.Text + "\n")
+	}
+	return b.String()
+}
+
+func TestFullAutoAllowsOnItsOwn(t *testing.T) {
+	m, calls := fullAutoManager(t, "gh pr merge 12 --squash")
+	id := m.StartPrompt(github.Event{Repo: "o/r", Kind: config.KindPullRequest, Number: 12}, "go", Options{FullAuto: true})
+	s := waitFor(t, m, id, func(s Session) bool { return s.Status == StatusIdle })
+	if len(s.Pending) != 0 || !strings.Contains(transcript(s), "decision=allow") {
+		t.Fatalf("full auto should approve without asking:\n%s", transcript(s))
+	}
+	call := lastClaudeCall(*calls)
+	if i := slices.Index(call, "--permission-mode"); i < 0 || call[i+1] != "manual" {
+		t.Fatalf("full auto must not let a permission mode skip the guard: %v", call)
+	}
+}
+
+func TestFullAutoRefusesWhatOnlyAHumanMayDo(t *testing.T) {
+	m, _ := fullAutoManager(t, "gh repo delete o/r --yes")
+	var refused string
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for u := range m.Updates() {
+			if u.Refused != "" {
+				refused = u.Refused
+				return
+			}
+		}
+	}()
+	id := m.StartPrompt(github.Event{Repo: "o/r", Kind: config.KindPullRequest, Number: 12}, "go", Options{FullAuto: true})
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no refusal reported")
+	}
+	s := waitFor(t, m, id, func(s Session) bool { return s.Status == StatusIdle })
+	if !strings.Contains(transcript(s), "decision=deny") || !strings.Contains(transcript(s), "refused Bash: gh repo delete") {
+		t.Fatalf("the guard should refuse and say so:\n%s", transcript(s))
+	}
+	if !strings.Contains(refused, "gh repo delete") {
+		t.Fatalf("the TUI should hear about the refusal: %q", refused)
+	}
+}
+
+func TestFullAutoArgs(t *testing.T) {
+	m := NewManager(config.Default(), "")
+	defer m.Shutdown()
+	c := m.cfg.Claude
+	c.PermissionMode = "auto"
+	args, _ := m.claudeArgs(c, "o/r", 3, "", []config.Action{config.ActionPushBranch}, false, true)
+	var settings struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+			Deny  []string `json:"deny"`
+		} `json:"permissions"`
+	}
+	json.Unmarshal([]byte(args[slices.Index(args, "--settings")+1]), &settings)
+	for _, a := range settings.Permissions.Allow {
+		if strings.HasPrefix(a, "Bash") {
+			t.Fatalf("no shell command may be pre-approved in full auto: %v", settings.Permissions.Allow)
+		}
+	}
+	if !contains(settings.Permissions.Allow, "Read") || !contains(settings.Permissions.Deny, "Bash(gh repo delete:*)") {
+		t.Fatalf("got %+v", settings.Permissions)
+	}
+	if args[slices.Index(args, "--permission-mode")+1] != "manual" ||
+		!strings.Contains(args[slices.Index(args, "--append-system-prompt")+1], "full auto mode") {
+		t.Fatalf("got %v", args)
 	}
 }

@@ -57,8 +57,8 @@ The screen has five tabs. Switch between them with `1`–`5` or `tab`.
 | --- | --- | --- |
 | **Events** | Open PRs, issues, Dependabot alerts and code scanning alerts on watched repos. A `●` marks an item that's new or changed since you last acted on it, and a tag such as `[CI failed]` says what changed. | `enter` start Claude (you can edit the instructions first, then `ctrl+s`) · `s` jump to its session · `o` open in browser · `x` dismiss until it changes |
 | **Sessions** | Every Claude session and its live transcript, with status and cost. | `enter` reply to a finished session or answer a pending prompt · `x` stop · `D` delete a finished session and its worktree · `pgup`/`pgdn` scroll · `f` follow |
-| **Repos** | Your repos, starred repos and repos where you have open PRs. | `space` watch/unwatch · `a` toggle auto-run · `e` choose event kinds and local checkout · `r` edit its rules · `f` cycle filter · `/` search |
-| **Rules** | The [auto rules](#configuration) for the global scope or one watched repo, in the order they're tried, plus the inbox and the repo's auto-run setting. Changes are saved to the config file and apply from the next poll. | `[`/`]` switch scope · `n` new rule · `enter` edit · `d` delete · `J`/`K` reorder · `c` copy the global rules into this repo · `a` toggle the repo's auto-run · `i` cycle the inbox (auto-run, list only, off) |
+| **Repos** | Your repos, starred repos and repos where you have open PRs. | `space` watch/unwatch · `a` cycle auto-run: off, on, [full auto](#full-auto) · `e` choose event kinds and local checkout · `r` edit its rules · `f` cycle filter · `/` search |
+| **Rules** | The [auto rules](#configuration) for the global scope or one watched repo, in the order they're tried, plus the inbox and the repo's auto-run setting. Changes are saved to the config file and apply from the next poll. | `[`/`]` switch scope · `n` new rule · `enter` edit · `d` delete · `J`/`K` reorder · `c` copy the global rules into this repo · `a` cycle the repo's auto-run (off, on, full auto) · `i` cycle the inbox (auto-run, full auto, list only, off) |
 | **Settings** | Prerequisite checks with fixes, then every top-level setting: polling, concurrency, the workspace, code folders, Claude Code's path, model, effort, permission mode, budget, allowed tools and extra arguments, the inbox, and the default prompt for each kind and trigger. An About section shows the version (also printed by `fast-lane -version`) and links to the source and to [buy me a coffee](https://buymeacoffee.com/drlholloway). | `enter` edit or cycle the selected setting, or open a link · `c` run the checks again |
 
 `R` refreshes everything, `?` shows more help, and `q` quits.
@@ -106,9 +106,21 @@ These three triggers are aimed at you, so they follow `inbox.auto_run` rather th
 
 A rule for one of these keys can also filter, for example `skip_bots` or `skip_labels`. To list them without running Claude, set `"inbox": { "auto_run": false }`. To stop reading notifications altogether, set `"enabled": false`.
 
+### Full auto
+
+Full auto is a third auto-run setting, per repo and for the inbox: every trigger runs, and Claude acts on its own judgment without asking. It reviews and approves or requests changes, merges pull requests when checks pass and it's confident, pushes fixes, comments, labels and closes, and never asks you a question. Rules still pick the prompt, model and effort for what they match, and a rule that rejects an item still keeps it from running.
+
+Only a human may delete or transfer a repository, force-push or delete its default branch, delete or move tags, delete releases, rewrite history, or change rulesets and branch protection. Three layers hold that line:
+
+1. **Fast Lane checks every command.** Full-auto sessions run in Claude Code's `manual` mode with no shell commands pre-approved, so every command comes to Fast Lane, which reads it the way a shell would (quotes, `&&`, `$(…)`, `bash -c`, `sudo` and other wrappers) and refuses those. Claude is told why; you get a bell and a status message, and the refusal stays in the transcript.
+2. **GitHub enforces it.** Turning on full auto for a repo adds two rulesets to it: one that blocks force-pushes to and deletion of the default branch, and one that blocks deleting or moving tags. They apply to everyone, so they also stop anything the first layer can't see, like a script Claude writes and runs. You can change them in the repo's settings. (Rulesets need a public repo or a paid plan for private ones; Fast Lane tells you if it couldn't add them.)
+3. **Your token can't.** `gh auth login` doesn't grant the `delete_repo` scope; the Settings tab warns you if your login has it while anything runs in full auto.
+
+Pressing `a` on a repo cycles off → on → full auto, and full auto asks first. The header shows **⚡ full auto** while anything runs in it, and the start dialog and session header say when a session is full auto. `max_auto_runs` and `max_budget_usd` still apply.
+
 ### Safety defaults
 
-- New repos are watched **without** auto-run. Turn it on per repo with `a`, and narrow it with `auto_rules` (see [Configuration](#configuration)). Events that already exist when you start watching a repo never auto-run, only ones that show up later. Other triggers auto-run only when an auto rule names them, except the personal ones from the [inbox](#inbox).
+- New repos are watched **without** auto-run, and never start in [full auto](#full-auto). Turn it on per repo with `a`, and narrow it with `auto_rules` (see [Configuration](#configuration)). Events that already exist when you start watching a repo never auto-run, only ones that show up later. Other triggers auto-run only when an auto rule names them, except the personal ones from the [inbox](#inbox).
 - Auto-run acts on one item at most `max_auto_runs` times (default 5), so a fix that keeps failing CI can't loop forever.
 - Claude runs with `--permission-mode manual`, and only read-only tools are pre-approved (`Read`, `Grep`, `Glob`, `git status/diff/log/show`, and `gh pr view/diff/checks`, `gh issue view`, `gh run view/list`, and `gh api --method GET` for API reads). Anything else asks you first, including `gh api` writes.
 - Claude's system prompt tells it to ask before pushing, opening PRs, commenting, labeling, submitting reviews, closing, merging or dismissing alerts, unless an auto rule's `allow` list pre-approves that action. It always asks before pushing to the default branch or force-pushing.
@@ -169,9 +181,10 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
 }
 ```
 
-- **`inbox`**: read review requests, mentions and assignments from your notifications (`enabled`), and run Claude on them without asking (`auto_run`). Both default to on. See [Inbox](#inbox).
+- **`inbox`**: read review requests, mentions and assignments from your notifications (`enabled`), and run Claude on them without asking (`auto_run`). Both default to on. `full_auto` runs them in [full auto](#full-auto). See [Inbox](#inbox).
 - **`max_auto_runs`**: the most times auto-run will start or resume a session for one item. Sessions you start yourself don't count.
 - **`code_dirs`**: where to look for local checkouts (see [Local checkouts](#local-checkouts)). Set it to `[]` to always clone.
+- **`full_auto`** (per repo): run every trigger in [full auto](#full-auto). It implies `auto_run`.
 - **`local_path`** (per repo): the checkout to make worktrees from, when the scan doesn't find the right one.
 - **`workspace_dir`**: repos without a local checkout are cloned here with `gh repo clone` on first use and fetched before each new session. Session worktrees live under `.worktrees/` here.
 - **`model`** / **`effort`**: passed to `claude --model` and `claude --effort` (`low`, `medium`, `high`, `xhigh` or `max`). Leave either out to use Claude Code's default. A rule's `model` and `effort` replace these for its sessions.

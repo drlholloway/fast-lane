@@ -83,6 +83,9 @@ type Client interface {
 	Inbox(ctx context.Context, me string, since time.Time) ([]InboxItem, error)
 	// Auth reports who the gh credentials belong to and what they allow.
 	Auth(ctx context.Context) (Auth, error)
+	// Protect adds rulesets that keep repo's default branch and tags from
+	// being overwritten or deleted, and returns the names of those it added.
+	Protect(ctx context.Context, repo string) ([]string, error)
 }
 
 // Auth describes the credentials Fast Lane uses.

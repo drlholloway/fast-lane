@@ -434,10 +434,13 @@ func (d *startDialog) view(m *Model) string {
 	var b strings.Builder
 	b.WriteString(sTitle.Render("Start a Claude session") + "\n")
 	b.WriteString(sMuted.Render(fit(fmt.Sprintf("%s %s #%d · runs in %s", d.ev.Repo, d.ev.Kind.Short(), d.ev.Number, d.workdir), w)) + "\n")
+	if d.opts.FullAuto {
+		b.WriteString(sBad.Render(fit("⚡ Full auto: Claude decides and acts on its own; only destroying the repo or its history is refused", w)) + "\n")
+	}
 	if run := modelEffort(d.opts.Model, d.opts.Effort); run != "" {
 		b.WriteString(sMuted.Render(fit(run, w)) + "\n")
 	}
-	if len(d.opts.Allow) > 0 {
+	if len(d.opts.Allow) > 0 && !d.opts.FullAuto {
 		names := make([]string, len(d.opts.Allow))
 		for i, a := range d.opts.Allow {
 			names[i] = string(a)

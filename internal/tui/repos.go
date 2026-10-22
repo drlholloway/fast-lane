@@ -165,14 +165,7 @@ func (m *Model) reposKey(msg tea.KeyMsg) tea.Cmd {
 			m.setStatus(false, "Watch %s first (space)", r.FullName)
 			return nil
 		}
-		rc.AutoRun = !rc.AutoRun
-		if rc.AutoRun && m.cfg.RulesFor(*rc) != nil {
-			return m.saveConfig("Auto-run on for %s: new events matching your auto rules start Claude sessions without asking", r.FullName)
-		}
-		if rc.AutoRun {
-			return m.saveConfig("Auto-run on for %s: new events start Claude sessions without asking", r.FullName)
-		}
-		return m.saveConfig("Auto-run off for %s", r.FullName)
+		return m.cycleAuto(r.FullName)
 	case "e":
 		rc := m.cfg.Repo(r.FullName)
 		if rc == nil {
@@ -250,7 +243,10 @@ func (m *Model) reposView(h int) string {
 		var flags []string
 		if rc := m.cfg.Repo(r.FullName); rc != nil {
 			check = sGood.Render("[✓]")
-			if rc.AutoRun {
+			switch {
+			case rc.FullAuto:
+				flags = append(flags, sBad.Render("FULL"))
+			case rc.AutoRun:
 				flags = append(flags, sAlert.Render("auto"))
 			}
 			if _, ok := m.mgr.CheckoutFor(r.FullName); ok {

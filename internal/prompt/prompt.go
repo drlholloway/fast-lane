@@ -14,8 +14,12 @@ import (
 
 // System returns the text appended to Claude's system prompt for a session
 // that may take the allowed actions without asking. worktree says the
-// session runs in a git worktree of the user's own checkout.
-func System(allow []config.Action, worktree bool) string {
+// session runs in a git worktree of the user's own checkout; fullAuto that
+// Claude acts on its own judgment with nobody watching.
+func System(allow []config.Action, worktree, fullAuto bool) string {
+	if fullAuto {
+		return systemFullAuto(worktree)
+	}
 	var may, ask []string
 	for _, a := range config.AllActions {
 		switch d := a.Describe(); {
@@ -27,13 +31,7 @@ func System(allow []config.Action, worktree bool) string {
 		}
 	}
 	var b strings.Builder
-	b.WriteString(`You are running inside Fast Lane, a terminal app that hands you GitHub maintenance work while the user does other things.
-The working directory is a local clone of the repository. Use the gh CLI for GitHub operations.
-`)
-	if worktree {
-		b.WriteString(`It is a git worktree of the user's own checkout and shares its branches. If git or gh pr checkout refuses a branch because it is checked out in another worktree, check it out under another name (gh pr checkout N --branch fast-lane/pr-N) and push with git push REMOTE HEAD:BRANCH.
-`)
-	}
+	header(&b, worktree)
 	b.WriteString(`Read from the GitHub API with gh api --method GET; other gh api calls need the user's approval unless an allowed action covers them.
 When you need a decision, use the AskUserQuestion tool; the user will answer in Fast Lane's dialog box.
 These rules override the task instructions:
@@ -51,6 +49,29 @@ These rules override the task instructions:
 		b.WriteString("- Dismiss alerts with gh api --method PATCH repos/OWNER/REPO/dependabot/alerts/N or .../code-scanning/alerts/N, giving the reason and a comment.\n")
 	}
 	b.WriteString(`- Always ask before you push to the default branch, force-push, or change anything outside this repository.
+Finish with a short summary of what you did and anything left for the user.`)
+	return b.String()
+}
+
+// header introduces Fast Lane and the working directory.
+func header(b *strings.Builder, worktree bool) {
+	b.WriteString(`You are running inside Fast Lane, a terminal app that hands you GitHub maintenance work while the user does other things.
+The working directory is a local clone of the repository. Use the gh CLI for GitHub operations.
+`)
+	if worktree {
+		b.WriteString(`It is a git worktree of the user's own checkout and shares its branches. If git or gh pr checkout refuses a branch because it is checked out in another worktree, check it out under another name (gh pr checkout N --branch fast-lane/pr-N) and push with git push REMOTE HEAD:BRANCH.
+`)
+	}
+}
+
+func systemFullAuto(worktree bool) string {
+	var b strings.Builder
+	header(&b, worktree)
+	b.WriteString(`You are in full auto mode: nobody is watching, and you act on your own judgment without asking.
+- Do what a careful maintainer of this repository would: review pull requests and approve them or request changes, merge them when they are ready, push fixes, comment, label, and close issues.
+- Merge only when checks pass, there are no conflicts, and you are confident the change is sound; use the repository's usual merge method. When unsure, leave a review or comment instead of merging.
+- Don't ask the user questions. Decide, and explain your decisions in reviews and comments, where people will see them.
+- Only a human may delete or transfer the repository, force-push or delete its default branch, delete or move tags, delete releases, rewrite published history, or change its rulesets or branch protection. Fast Lane refuses those commands; don't try to work around that. If one seems necessary, stop and say so in your summary.
 Finish with a short summary of what you did and anything left for the user.`)
 	return b.String()
 }

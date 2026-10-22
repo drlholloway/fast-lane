@@ -122,12 +122,7 @@ func (m *Model) rulesKey(msg tea.KeyMsg) tea.Cmd {
 			m.setStatus(false, "Auto-run is set per repo; switch scope with [ or ]")
 			return nil
 		}
-		rc := m.cfg.Repo(scope)
-		rc.AutoRun = !rc.AutoRun
-		if rc.AutoRun {
-			return m.saveConfig("Auto-run on for %s", scope)
-		}
-		return m.saveConfig("Auto-run off for %s", scope)
+		return m.cycleAuto(scope)
 	case "c":
 		if scope == "" {
 			return nil
@@ -196,13 +191,19 @@ func (m *Model) rulesView(h int) string {
 		sMuted.Render(fmt.Sprintf("  %d/%d · [ ] to switch", slices.Index(scopes, scope)+1, len(scopes))) + "\n")
 
 	in := inboxLabel(m.cfg.Inbox)
-	if m.cfg.Inbox.Enabled && m.cfg.Inbox.AutoRun {
+	switch {
+	case m.cfg.Inbox.Enabled && m.cfg.Inbox.FullAuto:
+		in = sBad.Render(in)
+	case m.cfg.Inbox.Enabled && m.cfg.Inbox.AutoRun:
 		in = sGood.Render(in)
 	}
 	line := sMuted.Render("inbox ") + in + sMuted.Render(" (i)")
 	if scope != "" {
 		ar := "off"
-		if m.cfg.Repo(scope).AutoRun {
+		switch rc := m.cfg.Repo(scope); {
+		case rc.FullAuto:
+			ar = sBad.Render("full auto")
+		case rc.AutoRun:
 			ar = sGood.Render("on")
 		}
 		line += sMuted.Render("   auto-run ") + ar + sMuted.Render(" (a)")

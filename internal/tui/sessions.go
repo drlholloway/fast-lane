@@ -215,6 +215,9 @@ func (m *Model) sessionsView(h int) string {
 	if s.Effort != "" {
 		model += " · " + s.Effort + " effort"
 	}
+	if s.FullAuto {
+		model += " · ⚡ full auto"
+	}
 	sub := sMuted.Render(fit(fmt.Sprintf("%s · %s #%d · started %s%s · %s", s.Event.Repo, s.Event.Kind.Short(),
 		s.Event.Number, started, model, m.sessionDir(s)), m.transcript.Width))
 	right := head + "\n" + sub + "\n" + m.transcript.View()

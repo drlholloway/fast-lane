@@ -40,7 +40,7 @@ func (m *Model) eventsKey(msg tea.KeyMsg) tea.Cmd {
 			m.setStatus(true, "%v", err)
 			return nil
 		}
-		m.dialog = newStartDialog(ev, text, options(rule), m.location(ev.Repo), m.width, m.height)
+		m.dialog = newStartDialog(ev, text, options(rule, m.fullAuto(ev, c)), m.location(ev.Repo), m.width, m.height)
 	case "s":
 		if s, ok := m.sessionFor(ev.Key); ok {
 			m.jumpToSession(s.ID)

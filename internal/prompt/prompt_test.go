@@ -39,13 +39,13 @@ func TestRenderOverride(t *testing.T) {
 }
 
 func TestSystemListsAllowedActions(t *testing.T) {
-	none := System(nil, false)
+	none := System(nil, false, false)
 	if !strings.Contains(none, "Ask the user with AskUserQuestion before you push new branches, open pull requests,") ||
 		strings.Contains(none, "You may") {
 		t.Fatalf("with nothing allowed every action should need approval:\n%s", none)
 	}
 
-	some := System([]config.Action{config.ActionEdit, config.ActionPushBranch, config.ActionOpenPR}, false)
+	some := System([]config.Action{config.ActionEdit, config.ActionPushBranch, config.ActionOpenPR}, false, false)
 	if !strings.Contains(some, "- You may push new branches and open pull requests without asking.") {
 		t.Fatalf("allowed actions missing:\n%s", some)
 	}
@@ -79,10 +79,22 @@ func TestRenderTriggers(t *testing.T) {
 }
 
 func TestSystemWorktreeNote(t *testing.T) {
-	if strings.Contains(System(nil, false), "worktree") {
+	if strings.Contains(System(nil, false, false), "worktree") {
 		t.Fatal("clones should not mention worktrees")
 	}
-	if !strings.Contains(System(nil, true), "gh pr checkout N --branch fast-lane/pr-N") {
+	if !strings.Contains(System(nil, true, false), "gh pr checkout N --branch fast-lane/pr-N") {
 		t.Fatal("worktree sessions should learn how to avoid branch clashes")
+	}
+}
+
+func TestSystemFullAuto(t *testing.T) {
+	s := System([]config.Action{config.ActionComment}, true, true)
+	for _, want := range []string{"full auto mode", "Merge only when checks pass", "Don't ask the user", "Only a human may delete or transfer the repository", "git worktree of the user's own checkout"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("full auto system prompt missing %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "Ask the user with AskUserQuestion") {
+		t.Fatal("full auto must not tell Claude to ask")
 	}
 }

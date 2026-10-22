@@ -18,6 +18,7 @@ import (
 
 	"github.com/drlholloway/fast-lane/internal/config"
 	"github.com/drlholloway/fast-lane/internal/github"
+	"github.com/drlholloway/fast-lane/internal/guard"
 	"github.com/drlholloway/fast-lane/internal/local"
 	"github.com/drlholloway/fast-lane/internal/prompt"
 )
@@ -59,6 +60,9 @@ type Session struct {
 	// Model and Effort override the configured ones when set.
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
+	// FullAuto sessions answer their own permission requests: Fast Lane
+	// allows everything guard.Check does not refuse.
+	FullAuto bool `json:"full_auto,omitempty"`
 	// Dir is where Claude runs, set when the session first starts. When
 	// Checkout is set, Dir is a git worktree of that local checkout, made
 	// from its Remote.
@@ -69,6 +73,8 @@ type Session struct {
 	Pending []Request `json:"-"`
 
 	nextInput string
+	// defaultBranch is the repo's default branch, for the guard.
+	defaultBranch string
 }
 
 // Update tells the TUI that a session changed.
@@ -76,6 +82,9 @@ type Update struct {
 	SessionID int
 	// NeedsUser is set when the session just started waiting on the user.
 	NeedsUser bool
+	// Refused is set when a full-auto session was refused something only a
+	// human may do; it says what.
+	Refused string
 }
 
 type proc struct {
@@ -131,6 +140,8 @@ type Manager struct {
 	cancel   context.CancelFunc
 	// checkouts maps lower-case "owner/name" to a local checkout.
 	checkouts map[string]local.Checkout
+	// branches caches each repo's default branch for the guard.
+	branches map[string]string
 	// running tracks execute goroutines so Shutdown can wait for them.
 	running sync.WaitGroup
 }
@@ -236,6 +247,8 @@ type Options struct {
 	// Model and Effort override the configured ones when set.
 	Model  string
 	Effort string
+	// FullAuto lets Claude act on its own judgment; see Session.FullAuto.
+	FullAuto bool
 }
 
 // StartPrompt queues a new session for ev with custom instructions and
@@ -244,7 +257,7 @@ func (m *Manager) StartPrompt(ev github.Event, text string, o Options) int {
 	m.mu.Lock()
 	now := time.Now()
 	s := &Session{ID: m.nextID, Event: ev, Status: StatusQueued, Started: now, Updated: now,
-		Allow: o.Allow, Model: o.Model, Effort: o.Effort, nextInput: text}
+		Allow: o.Allow, Model: o.Model, Effort: o.Effort, FullAuto: o.FullAuto, nextInput: text}
 	m.nextID++
 	m.sessions = append(m.sessions, s)
 	m.queue = append(m.queue, s.ID)
@@ -281,7 +294,7 @@ func (m *Manager) resume(id int, text string, o *Options) error {
 	}
 	s.nextInput = text
 	if o != nil {
-		s.Allow, s.Model, s.Effort = o.Allow, o.Model, o.Effort
+		s.Allow, s.Model, s.Effort, s.FullAuto = o.Allow, o.Model, o.Effort, o.FullAuto
 	}
 	s.Status = StatusQueued
 	s.Err = ""
@@ -508,7 +521,7 @@ func (m *Manager) execute(id int, p *proc, input string) {
 	m.mu.Lock()
 	s := m.find(id)
 	repo, number, resume, allow := s.Event.Repo, s.Event.Number, s.ClaudeID, s.Allow
-	model, effort := s.Model, s.Effort
+	model, effort, fullAuto := s.Model, s.Effort, s.FullAuto
 	dir, checkout, remote := s.Dir, s.Checkout, s.Remote
 	cfg := m.cfg
 	m.mu.Unlock()
@@ -525,6 +538,14 @@ func (m *Manager) execute(id int, p *proc, input string) {
 		m.fail(id, fmt.Sprintf("preparing %s: %v", dir, err))
 		return
 	}
+	if fullAuto {
+		branch := m.defaultBranch(repo)
+		m.mu.Lock()
+		if s := m.find(id); s != nil {
+			s.defaultBranch = branch
+		}
+		m.mu.Unlock()
+	}
 
 	c := cfg.Claude
 	if model != "" {
@@ -533,7 +554,7 @@ func (m *Manager) execute(id int, p *proc, input string) {
 	if effort != "" {
 		c.Effort = effort
 	}
-	err = m.runClaude(id, p, c, dir, repo, number, resume, allow, checkout != "", input)
+	err = m.runClaude(id, p, c, dir, repo, number, resume, allow, checkout != "", fullAuto, input)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s = m.find(id)
@@ -564,6 +585,49 @@ func (m *Manager) fail(id int, msg string) {
 	}
 	m.mu.Unlock()
 	m.notify(Update{SessionID: id})
+}
+
+// defaultBranch looks up repo's default branch once and remembers it. It is
+// empty when GitHub can't be reached; the guard then knows main and master.
+func (m *Manager) defaultBranch(repo string) string {
+	m.mu.Lock()
+	b, ok := m.branches[repo]
+	m.mu.Unlock()
+	if ok {
+		return b
+	}
+	out, err := m.run(m.ctx, "", "gh", "api", "repos/"+repo, "--jq", ".default_branch").Output()
+	if err != nil {
+		return ""
+	}
+	b = strings.TrimSpace(string(out))
+	m.mu.Lock()
+	if m.branches == nil {
+		m.branches = map[string]string{}
+	}
+	m.branches[repo] = b
+	m.mu.Unlock()
+	return b
+}
+
+// fullAutoQuestion answers Claude's questions in full auto.
+const fullAutoQuestion = "Fast Lane is in full auto mode and nobody is watching. Don't ask; decide for yourself, using your best judgment, and explain your decision where people will see it."
+
+// autoAnswer decides a full-auto session's request without the user: it
+// allows everything except what guard.Check refuses, and turns questions
+// back to Claude.
+func autoAnswer(tool string, req Request, defaultBranch string) (Answer, *Line) {
+	if req.IsQuestion() {
+		return Answer{Message: fullAutoQuestion}, &Line{LineInfo, "full auto: asked Claude to decide for itself"}
+	}
+	why := guard.Check(tool, req.Input, defaultBranch)
+	if why == "" {
+		return Answer{Allow: true}, nil
+	}
+	msg := "Fast Lane refused this command because it " + why + ". Only a human may delete or transfer the repository, " +
+		"force-push or delete its default branch, delete or move tags, delete releases, rewrite published history, " +
+		"or change rulesets or branch protection. Do something else, or leave it for the user and say so in your summary."
+	return Answer{Message: msg}, &Line{LineError, "refused " + req.ToolName + ": " + oneLine(req.Summary, 160) + " (" + why + ")"}
 }
 
 // prepareWorktree creates a session's worktree from the user's checkout the
@@ -686,17 +750,29 @@ func (m *Manager) prepareWorkdir(id int, repo, dir string) error {
 	return nil
 }
 
-func (m *Manager) claudeArgs(c config.Claude, repo string, number int, resume string, allow []config.Action, worktree bool) ([]string, error) {
+// fullAutoDeny are refused by Claude Code itself in full-auto sessions,
+// before Fast Lane's guard sees them.
+var fullAutoDeny = []string{
+	"Bash(gh repo delete:*)", "Bash(gh release delete:*)",
+	"Bash(git filter-branch:*)", "Bash(git filter-repo:*)",
+}
+
+func (m *Manager) claudeArgs(c config.Claude, repo string, number int, resume string, allow []config.Action, worktree, fullAuto bool) ([]string, error) {
 	args := []string{
 		"-p",
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--verbose",
 		"--permission-prompt-tool", "stdio",
-		"--append-system-prompt", prompt.System(allow, worktree),
+		"--append-system-prompt", prompt.System(allow, worktree, fullAuto),
 	}
-	if c.PermissionMode != "" {
-		args = append(args, "--permission-mode", c.PermissionMode)
+	mode := c.PermissionMode
+	if fullAuto {
+		// Every request must reach the guard, so no mode may settle one.
+		mode = "manual"
+	}
+	if mode != "" {
+		args = append(args, "--permission-mode", mode)
 	}
 	if c.Model != "" {
 		args = append(args, "--model", c.Model)
@@ -715,10 +791,20 @@ func (m *Manager) claudeArgs(c config.Claude, repo string, number int, resume st
 			}
 		}
 	}
+	perms := map[string]any{}
+	if fullAuto {
+		// Pre-approved shell commands would skip the guard; keep only tools
+		// that can't run commands, such as Read and Grep.
+		tools = slices.DeleteFunc(tools, func(t string) bool { return strings.HasPrefix(t, "Bash") })
+		perms["deny"] = fullAutoDeny
+	}
 	if len(tools) > 0 {
+		perms["allow"] = tools
+	}
+	if len(perms) > 0 {
 		// Passing rules through --settings avoids splitting rules that
 		// contain spaces or commas.
-		settings, err := json.Marshal(map[string]any{"permissions": map[string]any{"allow": tools}})
+		settings, err := json.Marshal(map[string]any{"permissions": perms})
 		if err != nil {
 			return nil, err
 		}
@@ -730,8 +816,8 @@ func (m *Manager) claudeArgs(c config.Claude, repo string, number int, resume st
 	return append(args, c.ExtraArgs...), nil
 }
 
-func (m *Manager) runClaude(id int, p *proc, c config.Claude, dir, repo string, number int, resume string, allow []config.Action, worktree bool, input string) error {
-	args, err := m.claudeArgs(c, repo, number, resume, allow, worktree)
+func (m *Manager) runClaude(id int, p *proc, c config.Claude, dir, repo string, number int, resume string, allow []config.Action, worktree, fullAuto bool, input string) error {
+	args, err := m.claudeArgs(c, repo, number, resume, allow, worktree, fullAuto)
 	if err != nil {
 		return err
 	}
@@ -837,7 +923,25 @@ func (m *Manager) handle(id int, p *proc, msg streamMsg) bool {
 			_ = p.write(controlError(msg.RequestID, "unsupported control request: "+sub))
 			return false
 		}
-		s.Pending = append(s.Pending, newRequest(id, msg))
+		req := newRequest(id, msg)
+		if s.FullAuto {
+			a, line := autoAnswer(msg.Request.ToolName, req, s.defaultBranch)
+			if line != nil {
+				s.Lines = appendLine(s.Lines, *line)
+			}
+			if !a.Allow && !req.IsQuestion() {
+				u.Refused = req.ToolName + ": " + oneLine(req.Summary, 120)
+			}
+			m.mu.Unlock()
+			resp, err := controlResponse(req, a)
+			if err != nil {
+				resp = controlError(req.RequestID, err.Error())
+			}
+			_ = p.write(resp)
+			m.notify(u)
+			return false
+		}
+		s.Pending = append(s.Pending, req)
 		s.Status = StatusWaiting
 		u.NeedsUser = true
 	case "result":

@@ -18,12 +18,18 @@ import (
 )
 
 type fakeGH struct {
-	events []github.Event
-	inbox  []github.InboxItem
-	since  time.Time
+	events    []github.Event
+	inbox     []github.InboxItem
+	since     time.Time
+	protected []string
 }
 
 func (f *fakeGH) CurrentUser(context.Context) (string, error) { return "me", nil }
+func (f *fakeGH) Protect(_ context.Context, repo string) ([]string, error) {
+	f.protected = append(f.protected, repo)
+	return []string{"Fast Lane: protect the default branch", "Fast Lane: protect tags"}, nil
+}
+
 func (f *fakeGH) Auth(context.Context) (github.Auth, error) {
 	return github.Auth{Login: "me", Scopes: []string{"repo", "read:org"}, ScopesKnown: true}, nil
 }

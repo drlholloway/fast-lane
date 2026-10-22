@@ -26,25 +26,32 @@ func RuleFor(cfg *config.Config, r config.Repo, ev github.Event, t config.Trigge
 	return config.Rule{}, false
 }
 
+// FullAuto reports whether trigger t on repo r runs in full auto: the repo
+// is in full auto, or t is a personal trigger and the inbox is.
+func FullAuto(cfg *config.Config, r config.Repo, t config.Trigger) bool {
+	return r.FullAuto || t.Personal() && cfg.Inbox.FullAuto
+}
+
 // Decide reports whether trigger t on ev should start or resume a session
-// without asking, and the rule to use. Personal triggers follow the inbox's
-// auto-run setting and, when auto_rules have no key for them, run with an
-// empty rule, so Claude asks before posting. Other triggers follow the repo's
-// auto-run setting and RuleFor.
+// without asking, and the rule to use.
+//
+// In full auto, and for personal triggers with the inbox's auto-run on, every
+// trigger runs: with its rule when one accepts the item, with an empty rule
+// when the key has none, and not at all when the key has rules and none
+// accepts the item. Otherwise triggers follow the repo's auto-run setting and
+// RuleFor.
 func Decide(cfg *config.Config, r config.Repo, ev github.Event, t config.Trigger) (config.Rule, bool) {
-	if !t.Personal() {
-		if !r.AutoRun {
-			return config.Rule{}, false
+	everything := FullAuto(cfg, r, t) || t.Personal() && cfg.Inbox.AutoRun
+	switch {
+	case everything:
+		if _, set := cfg.RulesFor(r)[config.Key(ev.Kind, t)]; set {
+			return RuleFor(cfg, r, ev, t)
 		}
-		return RuleFor(cfg, r, ev, t)
-	}
-	if !cfg.Inbox.AutoRun {
+		return config.Rule{}, true
+	case t.Personal() || !r.AutoRun:
 		return config.Rule{}, false
 	}
-	if _, set := cfg.RulesFor(r)[config.Key(ev.Kind, t)]; set {
-		return RuleFor(cfg, r, ev, t)
-	}
-	return config.Rule{}, true
+	return RuleFor(cfg, r, ev, t)
 }
 
 // Accepts reports whether ev passes every filter set on rule.

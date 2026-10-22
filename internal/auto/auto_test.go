@@ -118,3 +118,31 @@ func TestDecidePersonalTriggers(t *testing.T) {
 		t.Fatal("inbox auto_run off should stop personal triggers")
 	}
 }
+
+func TestDecideFullAuto(t *testing.T) {
+	cfg := config.Default()
+	cfg.AutoRules = map[config.RuleKey]config.Rules{"pull_request": {{SkipDrafts: true, Model: "claude-opus-5-5"}}}
+	full := config.Repo{FullName: "o/r", FullAuto: true}
+	pr := github.Event{Kind: config.KindPullRequest}
+
+	if _, ok := Decide(cfg, full, pr, config.TriggerPushed); !ok {
+		t.Fatal("full auto runs triggers that have no rule")
+	}
+	if rule, ok := Decide(cfg, full, pr, config.TriggerOpened); !ok || rule.Model != "claude-opus-5-5" {
+		t.Fatal("full auto still uses a matching rule's prompt, model and effort")
+	}
+	if _, ok := Decide(cfg, full, github.Event{Kind: config.KindPullRequest, Draft: true}, config.TriggerOpened); ok {
+		t.Fatal("a rule that rejects the item still holds in full auto")
+	}
+	if !FullAuto(cfg, full, config.TriggerOpened) || FullAuto(cfg, config.Repo{AutoRun: true}, config.TriggerOpened) {
+		t.Fatal("full auto is per repo")
+	}
+	cfg.Inbox.FullAuto = true
+	if !FullAuto(cfg, config.Repo{}, config.TriggerMentioned) || FullAuto(cfg, config.Repo{}, config.TriggerOpened) {
+		t.Fatal("the inbox's full auto covers personal triggers only")
+	}
+	cfg.Inbox.AutoRun = false
+	if _, ok := Decide(cfg, config.Repo{}, pr, config.TriggerReviewRequested); !ok {
+		t.Fatal("inbox full auto runs personal triggers")
+	}
+}

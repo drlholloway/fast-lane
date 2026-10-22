@@ -325,6 +325,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.NeedsUser {
 			cmds = append(cmds, bell)
 		}
+		if msg.Refused != "" {
+			m.setStatus(true, "Full auto refused, in session #%d: %s (only a human may do that)", msg.SessionID, msg.Refused)
+			cmds = append(cmds, bell)
+		}
 		cmds = append(cmds, m.maybeOpenPending())
 
 	case refreshTickMsg:
@@ -337,6 +341,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.status != "" && !m.statusErr && time.Since(m.statusAt) > 8*time.Second {
 			m.status = ""
 		}
+
+	case protectedMsg:
+		m.onProtected(msg)
 
 	case checksMsg:
 		m.onChecks(msg)
@@ -573,9 +580,15 @@ type pendingRun struct {
 	opts claude.Options
 }
 
-// options turns the rule governing a session into its options.
-func options(r config.Rule) claude.Options {
-	return claude.Options{Allow: r.Allow, Model: r.Model, Effort: r.Effort}
+// options turns the rule governing a session, and whether it runs in full
+// auto, into its options.
+func options(r config.Rule, fullAuto bool) claude.Options {
+	return claude.Options{Allow: r.Allow, Model: r.Model, Effort: r.Effort, FullAuto: fullAuto}
+}
+
+// fullAuto reports whether change c on ev runs in full auto.
+func (m *Model) fullAuto(ev github.Event, c github.Change) bool {
+	return auto.FullAuto(m.cfg, m.repoFor(ev), c.Trigger)
 }
 
 // runChange acts on change c. It resumes the item's last session so Claude
@@ -589,11 +602,11 @@ func (m *Model) runChange(ev github.Event, c github.Change, rule config.Rule) er
 	s, ok := m.sessionFor(ev.Key)
 	switch {
 	case !ok || s.ClaudeID == "":
-		return m.startSessionWithPrompt(ev, text, options(rule))
+		return m.startSessionWithPrompt(ev, text, options(rule, m.fullAuto(ev, c)))
 	case s.Status.Active() || s.Status == claude.StatusQueued:
-		m.pending[s.ID] = pendingRun{text: text, opts: options(rule)}
+		m.pending[s.ID] = pendingRun{text: text, opts: options(rule, m.fullAuto(ev, c))}
 	default:
-		if err := m.mgr.Resume(s.ID, text, options(rule)); err != nil {
+		if err := m.mgr.Resume(s.ID, text, options(rule, m.fullAuto(ev, c))); err != nil {
 			return err
 		}
 		m.refreshSessions()
@@ -859,6 +872,9 @@ func (m *Model) headerView() string {
 		parts = append(parts, sMuted.Render("@"+m.login))
 	}
 	parts = append(parts, sMuted.Render(fmt.Sprintf("watching %d", len(m.cfg.Repos))))
+	if badge := m.fullAutoBadge(); badge != "" {
+		parts = append(parts, badge)
+	}
 	running := 0
 	for _, s := range m.sessions {
 		if s.Status.Active() {

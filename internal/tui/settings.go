@@ -249,7 +249,7 @@ var settings = []setting{
 					return m.saveConfig("Extra arguments saved for new turns"), nil
 				})
 		}},
-	{label: "Inbox", about: "Review requests, mentions and assignments from your notifications. enter cycles auto-run, list only, off.",
+	{label: "Inbox", about: "Review requests, mentions and assignments from your notifications. enter cycles auto-run, full auto, list only, off.",
 		value: func(m *Model) string { return inboxLabel(m.cfg.Inbox) },
 		edit: func(m *Model) tea.Cmd {
 			return tea.Batch(m.cycleInbox(), m.runChecks())
@@ -274,31 +274,6 @@ var settings = []setting{
 	{group: "About", label: "Buy me a coffee", about: "Fast Lane is free. If it saved you time, a coffee keeps it in the fast lane. enter opens it in your browser.",
 		value: func(m *Model) string { return sWarn.Render("☕ ") + stripScheme(coffeeURL) },
 		edit:  func(m *Model) tea.Cmd { return m.open(coffeeURL) }},
-}
-
-func inboxLabel(in config.Inbox) string {
-	switch {
-	case in.Enabled && in.AutoRun:
-		return "on, auto-run"
-	case in.Enabled:
-		return "on, list only"
-	}
-	return "off"
-}
-
-func (m *Model) cycleInbox() tea.Cmd {
-	in := &m.cfg.Inbox
-	switch {
-	case in.Enabled && in.AutoRun:
-		in.AutoRun = false
-		return m.saveConfig("Inbox: listing review requests, mentions and assignments without running Claude")
-	case in.Enabled:
-		in.Enabled = false
-		return m.saveConfig("Inbox: off")
-	default:
-		in.Enabled, in.AutoRun = true, true
-		return m.saveConfig("Inbox: on, running Claude on review requests, mentions and assignments")
-	}
 }
 
 func (m *Model) settingsKey(msg tea.KeyMsg) tea.Cmd {

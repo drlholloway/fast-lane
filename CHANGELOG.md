@@ -3,9 +3,16 @@
 All notable changes to Fast Lane. The section for a tagged version becomes the
 GitHub Release notes.
 
-## Unreleased
+## 0.2.0 — 2026-10-21
 
 ### Added
+- **Full auto**, a third auto-run setting per repo and for the inbox. Every
+  trigger runs and Claude acts on its own judgment: approving or requesting
+  changes, merging, pushing, commenting and closing, without asking. Only a
+  human may delete or transfer a repository or destroy its history: Fast Lane
+  checks every command a full-auto session runs and refuses those, adds
+  GitHub rulesets protecting the default branch and tags when you turn it on,
+  and warns if your login has the `delete_repo` scope.
 - A security policy, contributing guide, code of conduct, issue and pull
   request templates, CI on Linux and macOS, and release builds for macOS and
   Linux attached to each GitHub Release.
