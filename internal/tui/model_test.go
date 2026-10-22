@@ -341,10 +341,21 @@ func TestTriggerResumesFinishedSession(t *testing.T) {
 	if len(ss) != 1 || ss[0].ID != 7 {
 		t.Fatalf("the change should resume session 7, not start another: %+v", ss)
 	}
-	last := ss[0].Lines[len(ss[0].Lines)-1].Text
-	if !strings.Contains(last, "@bob commented") || !strings.Contains(last, "please rename x") || len(ss[0].Allow) != 1 {
-		t.Fatalf("resume should send the trigger prompt and the rule's actions: %q %v", last, ss[0].Allow)
+	sent := sentLine(ss[0], "@bob commented")
+	if !strings.Contains(sent, "please rename x") || len(ss[0].Allow) != 1 {
+		t.Fatalf("resume should send the trigger prompt and the rule's actions: %q %v", sent, ss[0].Allow)
 	}
+}
+
+// sentLine returns the first transcript line containing want. The fake claude
+// exits at once, so its "exit status" line may follow the prompt at any time.
+func sentLine(s claude.Session, want string) string {
+	for _, l := range s.Lines {
+		if strings.Contains(l.Text, want) {
+			return l.Text
+		}
+	}
+	return ""
 }
 
 func TestBusySessionGetsChangeAfterItsTurn(t *testing.T) {
@@ -363,7 +374,7 @@ func TestBusySessionGetsChangeAfterItsTurn(t *testing.T) {
 	if _, waiting := m.pending[9]; waiting {
 		t.Fatal("an idle session should receive its pending change")
 	}
-	if s := m.mgr.Snapshot()[0]; s.Lines[len(s.Lines)-1].Text != "CI failed again" {
+	if s := m.mgr.Snapshot()[0]; sentLine(s, "CI failed again") == "" {
 		t.Fatalf("pending change not delivered: %+v", s.Lines)
 	}
 }
