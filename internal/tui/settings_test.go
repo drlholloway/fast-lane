@@ -2,16 +2,17 @@ package tui
 
 import (
 	"context"
-
-	tea "github.com/charmbracelet/bubbletea"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/drlholloway/fast-lane/internal/config"
 	"github.com/drlholloway/fast-lane/internal/doctor"
+	"github.com/drlholloway/fast-lane/internal/github"
 )
 
 func settingIndex(t *testing.T, label string) int {
@@ -209,8 +210,41 @@ func TestSettingsAbout(t *testing.T) {
 	}
 	m.setCursor = settingIndex(t, "Version")
 	keys(m, "enter")
-	if m.dialog != nil || len(opened) != 2 {
-		t.Fatal("enter on Version does nothing")
+	if len(opened) != 3 || opened[2] != "https://github.com/drlholloway/fast-lane/releases" {
+		t.Fatalf("enter on Version should open the releases: %v", opened)
+	}
+}
+
+func TestNewRelease(t *testing.T) {
+	m, gh := newTestModel(t)
+	var opened []string
+	m.Browse = func(u string) error { opened = append(opened, u); return nil }
+	m.Outdated = func(tag string, _ time.Time) bool { return tag == "v9.0.0" }
+	keys(m, "5")
+
+	gh.release = github.Release{Tag: "v0.2.0", URL: "https://example.com/v0.2.0"}
+	run(m, m.checkRelease())
+	if v := m.View(); strings.Contains(v, "is out") || !strings.Contains(v, "up to date (newest is v0.2.0)") {
+		t.Fatalf("an older release should read as up to date:\n%s", v)
+	}
+
+	gh.release = github.Release{Tag: "v9.0.0", URL: "https://example.com/v9.0.0"}
+	keys(m, "c") // checks again
+	run(m, m.checkRelease())
+	v := m.View()
+	if !strings.Contains(v, "⬆ v9.0.0 is out") || !strings.Contains(v, "Fast Lane v9.0.0 is out (you have") {
+		t.Fatalf("a newer release should show on the Version setting and in the footer:\n%s", v)
+	}
+	m.setCursor = settingIndex(t, "Version")
+	keys(m, "enter")
+	if len(opened) != 1 || opened[0] != "https://example.com/v9.0.0" {
+		t.Fatalf("enter should open the new release: %v", opened)
+	}
+
+	// A lasting warning in the status line doesn't hide the notice.
+	m.setStatus(true, "Setup needs attention")
+	if v := m.View(); !strings.Contains(v, "Setup needs attention") || !strings.Contains(v, "Fast Lane v9.0.0 is out") {
+		t.Fatalf("the status and the notice should both show:\n%s", v)
 	}
 }
 

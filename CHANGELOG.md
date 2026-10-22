@@ -3,6 +3,14 @@
 All notable changes to Fast Lane. The section for a tagged version becomes the
 GitHub Release notes.
 
+## 0.2.1 — 2026-10-22
+
+### Added
+- Fast Lane looks for a newer release when it starts and once a day. When
+  one is out, a line above the key help says so, and Settings → Version
+  shows it; `enter` there opens the release page. `c` on the Settings tab
+  looks again.
+
 ## 0.2.0 — 2026-10-21
 
 ### Added

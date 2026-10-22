@@ -25,6 +25,7 @@ import (
 	"github.com/drlholloway/fast-lane/internal/local"
 	"github.com/drlholloway/fast-lane/internal/prompt"
 	"github.com/drlholloway/fast-lane/internal/state"
+	"github.com/drlholloway/fast-lane/internal/version"
 )
 
 type tab int
@@ -78,6 +79,9 @@ type Model struct {
 	Browse func(url string) error
 	// Check runs the prerequisite checks; swapped out in tests.
 	Check func(context.Context, doctor.Env) []doctor.Check
+	// Outdated reports whether a release is newer than this build; swapped
+	// out in tests.
+	Outdated func(tag string, published time.Time) bool
 
 	width, height int
 	tab           tab
@@ -113,6 +117,10 @@ type Model struct {
 	checks    []doctor.Check
 	checking  bool
 	setCursor int
+	// latest is Fast Lane's newest release, once checked.
+	latest     github.Release
+	releaseErr error
+	checkedAt  time.Time
 
 	// Rules tab: the scope is "" for the global rules or a watched repo.
 	ruleScope  string
@@ -148,6 +156,7 @@ func New(cfg *config.Config, st *state.State, gh github.Client, mgr *claude.Mana
 		mgr:      mgr,
 		Browse:   openURL,
 		Check:    doctor.Run,
+		Outdated: version.Outdated,
 		loading:  true,
 		spinner:  sp,
 		filter:   fi,
@@ -167,7 +176,8 @@ func openURL(url string) error {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.load(), m.waitSession(), refreshTick(), m.pollAll(), m.pruneWorktrees(), m.runChecks())
+	return tea.Batch(m.spinner.Tick, m.load(), m.waitSession(), refreshTick(), m.pollAll(), m.pruneWorktrees(), m.runChecks(),
+		m.checkRelease(), releaseTick())
 }
 
 // worktreeMaxAge is how long a finished session keeps its worktree.
@@ -341,6 +351,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.status != "" && !m.statusErr && time.Since(m.statusAt) > 8*time.Second {
 			m.status = ""
 		}
+
+	case releaseMsg:
+		m.onRelease(msg)
+
+	case releaseTickMsg:
+		cmds = append(cmds, m.checkRelease(), releaseTick())
 
 	case protectedMsg:
 		m.onProtected(msg)
@@ -936,6 +952,9 @@ func (m *Model) footerView() string {
 	if m.showHelp {
 		help = helpLine("tab/1-5", "switch tabs", "j/k", "move", "g/G", "top/bottom", "R", "refresh now") + "\n" +
 			sMuted.Render("Config: "+m.cfg.Path()) + "\n" + help
+	}
+	if n := m.updateNotice(); n != "" {
+		help = sWarn.Render(fit(n, m.width)) + "\n" + help
 	}
 	if m.status != "" {
 		st := sGood

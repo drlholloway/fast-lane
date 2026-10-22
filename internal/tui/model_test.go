@@ -22,6 +22,11 @@ type fakeGH struct {
 	inbox     []github.InboxItem
 	since     time.Time
 	protected []string
+	release   github.Release
+}
+
+func (f *fakeGH) LatestRelease(context.Context, string) (github.Release, error) {
+	return f.release, nil
 }
 
 func (f *fakeGH) CurrentUser(context.Context) (string, error) { return "me", nil }

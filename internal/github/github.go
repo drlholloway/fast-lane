@@ -86,6 +86,9 @@ type Client interface {
 	// Protect adds rulesets that keep repo's default branch and tags from
 	// being overwritten or deleted, and returns the names of those it added.
 	Protect(ctx context.Context, repo string) ([]string, error)
+	// LatestRelease returns repo's newest release, or a zero Release when
+	// it has none.
+	LatestRelease(ctx context.Context, repo string) (Release, error)
 }
 
 // Auth describes the credentials Fast Lane uses.

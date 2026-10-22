@@ -15,7 +15,6 @@ import (
 	"github.com/drlholloway/fast-lane/internal/doctor"
 	"github.com/drlholloway/fast-lane/internal/local"
 	"github.com/drlholloway/fast-lane/internal/prompt"
-	"github.com/drlholloway/fast-lane/internal/version"
 )
 
 // The Settings tab checks prerequisites and edits every top-level setting.
@@ -265,9 +264,9 @@ var settings = []setting{
 			m.dialog = newPromptsDialog(m.width)
 			return nil
 		}},
-	{group: "About", label: "Version", about: "The build of Fast Lane you're running. fast-lane -version prints it too.",
-		value: func(m *Model) string { return version.String() },
-		edit:  func(m *Model) tea.Cmd { return nil }},
+	{group: "About", label: "Version", about: "The build of Fast Lane you're running; fast-lane -version prints it too. Fast Lane looks for a newer release when it starts and once a day, and c looks again. enter opens the newest release.",
+		value: func(m *Model) string { return m.versionValue() },
+		edit:  func(m *Model) tea.Cmd { return m.openRelease() }},
 	{group: "About", label: "Source", about: "Code, issues and releases. enter opens it in your browser.",
 		value: func(m *Model) string { return stripScheme(repoURL) },
 		edit:  func(m *Model) tea.Cmd { return m.open(repoURL) }},
@@ -282,7 +281,7 @@ func (m *Model) settingsKey(msg tea.KeyMsg) tea.Cmd {
 	}
 	switch msg.String() {
 	case "c":
-		return m.runChecks()
+		return tea.Batch(m.runChecks(), m.checkRelease())
 	case "enter", " ":
 		return settings[m.setCursor].edit(m)
 	}
