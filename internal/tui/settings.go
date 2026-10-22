@@ -248,7 +248,7 @@ var settings = []setting{
 					return m.saveConfig("Extra arguments saved for new turns"), nil
 				})
 		}},
-	{label: "Inbox", about: "Review requests, mentions and assignments from your notifications. enter cycles auto-run, full auto, list only, off.",
+	{label: "Inbox", about: "Review requests, mentions and assignments from your notifications. enter cycles list only, off, auto-run, full auto.",
 		value: func(m *Model) string { return inboxLabel(m.cfg.Inbox) },
 		edit: func(m *Model) tea.Cmd {
 			return tea.Batch(m.cycleInbox(), m.runChecks())

@@ -101,8 +101,12 @@ func TestDecidePersonalTriggers(t *testing.T) {
 	if _, ok := Decide(cfg, off, pr, config.TriggerOpened); ok {
 		t.Fatal("repo triggers need the repo's auto_run")
 	}
+	if _, ok := Decide(cfg, off, pr, config.TriggerReviewRequested); ok {
+		t.Fatal("by default the inbox only lists review requests")
+	}
+	cfg.Inbox.AutoRun = true
 	if rule, ok := Decide(cfg, off, pr, config.TriggerReviewRequested); !ok || len(rule.Allow) != 0 {
-		t.Fatal("review requests should auto-run with nothing pre-approved by default")
+		t.Fatal("with inbox auto_run on, review requests should auto-run with nothing pre-approved")
 	}
 
 	cfg.AutoRules["pull_request:review_requested"] = config.Rules{{SkipBots: true, Allow: []config.Action{config.ActionReview}}}

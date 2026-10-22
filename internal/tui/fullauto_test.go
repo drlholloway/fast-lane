@@ -86,7 +86,14 @@ func TestRefusalReachesTheStatusLine(t *testing.T) {
 
 func TestInboxCycleWithFullAuto(t *testing.T) {
 	m, _ := newTestModel(t)
-	keys(m, "4", "i")
+	if !m.cfg.Inbox.Enabled || m.cfg.Inbox.AutoRun {
+		t.Fatal("the inbox starts out listing only")
+	}
+	keys(m, "4", "i", "i")
+	if !m.cfg.Inbox.Enabled || !m.cfg.Inbox.AutoRun {
+		t.Fatal("list only, then off, then auto-run")
+	}
+	keys(m, "i")
 	if m.dialog == nil || !strings.Contains(m.View(), "Turn on full auto for the inbox?") {
 		t.Fatal("from auto-run, i should ask before full auto")
 	}

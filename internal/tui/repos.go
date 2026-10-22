@@ -109,20 +109,26 @@ func (m *Model) visibleRepos() []repoRow {
 	return out
 }
 
+// updateFilter edits the search box of the Repos or Events tab.
 func (m *Model) updateFilter(msg tea.KeyMsg) tea.Cmd {
+	in, cursor := &m.filter, &m.repoCursor
+	if m.tab == tabEvents {
+		in, cursor = &m.eventQuery, &m.eventCursor
+		defer m.rebuildFeed()
+	}
 	switch msg.String() {
 	case "esc":
-		m.filter.SetValue("")
+		in.SetValue("")
 		fallthrough
 	case "enter":
 		m.filtering = false
-		m.filter.Blur()
-		m.repoCursor = 0
+		in.Blur()
+		*cursor = 0
 		return nil
 	}
 	var cmd tea.Cmd
-	m.filter, cmd = m.filter.Update(msg)
-	m.repoCursor = 0
+	*in, cmd = in.Update(msg)
+	*cursor = 0
 	return cmd
 }
 
@@ -202,15 +208,7 @@ func (m *Model) saveConfig(format string, args ...any) tea.Cmd {
 
 func (m *Model) reposView(h int) string {
 	var b strings.Builder
-	var src []string
-	for i, n := range sourceNames {
-		if repoSource(i) == m.repoSource {
-			src = append(src, sTabOn.Render(n))
-		} else {
-			src = append(src, sTabOff.Render(n))
-		}
-	}
-	top := "show: " + strings.Join(src, " ")
+	top := "show: " + choices(sourceNames, int(m.repoSource))
 	if m.filtering || m.filter.Value() != "" {
 		top += "   " + m.filter.View()
 	}

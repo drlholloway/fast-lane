@@ -18,6 +18,9 @@ import (
 type InboxItem struct {
 	Event  Event
 	Change Change
+	// TeamMention marks a mention of a team the user is in rather than of
+	// the user.
+	TeamMention bool
 }
 
 type notificationJSON struct {
@@ -136,7 +139,7 @@ func inboxItem(n notificationJSON, subj issueJSON, c *commentJSON, me string) (I
 		}
 		ch = Change{Trigger: config.TriggerMentioned, ID: "mentioned@body", Actor: ev.Author, Detail: ev.Body}
 	}
-	return InboxItem{Event: ev, Change: ch}, true
+	return InboxItem{Event: ev, Change: ch, TeamMention: n.Reason == "team_mention"}, true
 }
 
 func anyUser(us []userJSON, f func(userJSON) bool) bool {

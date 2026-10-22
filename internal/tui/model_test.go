@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -387,6 +388,7 @@ func TestBusySessionGetsChangeAfterItsTurn(t *testing.T) {
 func TestInboxRunsPersonalTriggers(t *testing.T) {
 	m, gh := newTestModel(t)
 	m.login = "me"
+	m.cfg.Inbox.AutoRun = true
 	run(m, m.pollInbox())
 	if m.st.InboxSince.IsZero() || len(m.mgr.Snapshot()) != 0 {
 		t.Fatal("the first inbox poll should only record the time")
@@ -406,7 +408,7 @@ func TestInboxRunsPersonalTriggers(t *testing.T) {
 	}
 	ss := m.mgr.Snapshot()
 	if len(ss) != 2 || len(ss[0].Allow)+len(ss[1].Allow) != 0 {
-		t.Fatalf("both should auto-run with nothing pre-approved by default: %+v", ss)
+		t.Fatalf("both should auto-run with nothing pre-approved: %+v", ss)
 	}
 	if len(m.feed) != 2 {
 		t.Fatalf("inbox items from unwatched repos belong in the feed: %v", m.feed)
@@ -422,6 +424,7 @@ func TestInboxRunsPersonalTriggers(t *testing.T) {
 func TestInboxHonorsRulesAndSwitch(t *testing.T) {
 	m, gh := newTestModel(t)
 	m.login = "me"
+	m.cfg.Inbox.AutoRun = true
 	m.st.InboxSince = time.Now()
 	m.cfg.AutoRules = map[config.RuleKey]config.Rules{
 		"pull_request:review_requested": {{Allow: []config.Action{config.ActionReview}}},
@@ -464,5 +467,111 @@ func TestDeleteFinishedSession(t *testing.T) {
 	keys(m, "y")
 	if len(m.mgr.Snapshot()) != 0 || m.hasSession(issue.Key) {
 		t.Fatal("the session and its event link should be gone")
+	}
+}
+
+func TestEventsFilterSearchAndSort(t *testing.T) {
+	m, gh := newTestModel(t)
+	m.cfg.Watch("me/app")
+	alert := ev(3, config.KindDependabot)
+	alert.Severity = "critical"
+	pr, issue := ev(1, config.KindPullRequest), ev(2, config.KindIssue)
+	pr.Title, issue.Title, alert.Title = "Zebra", "apple", "Mango"
+	gh.events = []github.Event{pr, issue, alert}
+	run(m, m.pollRepo(*m.cfg.Repo("me/app")))
+	inbox := func(repo string, n int, title string) github.Event {
+		e := github.Event{Key: github.EventKey(repo, config.KindIssue, n), Repo: repo, Kind: config.KindIssue,
+			Number: n, Title: title, UpdatedAt: time.Now().Add(-time.Duration(n) * time.Hour)}
+		m.st.Inbox[e.Key] = e
+		return e
+	}
+	review := inbox("them/lib", 9, "Review this")
+	m.st.LastChange[review.Key] = github.Change{Trigger: config.TriggerReviewRequested}
+	m.st.NoteMention(inbox("zed/x", 10, "Question for you").Key, false)
+	m.st.NoteMention(inbox("acme/y", 11, "Ping").Key, false)
+	m.st.NoteMention(inbox("org/z", 12, "Team ping").Key, true)
+	m.rebuildFeed()
+	m.tab = tabEvents
+	numbers := func() (out []int) {
+		for _, e := range m.shown {
+			out = append(out, e.Number)
+		}
+		return out
+	}
+	same := func(got []int, want ...int) bool {
+		return fmt.Sprint(got) == fmt.Sprint(want)
+	}
+
+	// Default: watched, then mentions of me, then team mentions, each a–z;
+	// the review request from an unwatched repo isn't shown.
+	if got := numbers(); !same(got, 2, 3, 1, 11, 10, 12) {
+		t.Fatalf("default view: %v", got)
+	}
+	view := m.View()
+	for _, h := range []string{"Watched repos", "Mentions of me", "Team mentions", "Events (6/7)"} {
+		if !strings.Contains(view, h) {
+			t.Fatalf("view should show %q:\n%s", h, view)
+		}
+	}
+	keys(m, "j", "j", "j")
+	if e, _ := m.selectedEvent(); e.Number != 11 {
+		t.Fatalf("the cursor skips headers: %v", e)
+	}
+
+	keys(m, "f", "f") // new: baseline events aren't new
+	if len(m.shown) != 0 || !strings.Contains(m.View(), "Nothing matches") {
+		t.Fatalf("no event is new yet: %v", numbers())
+	}
+	keys(m, "f") // for me
+	if got := numbers(); !same(got, 11, 12, 9, 10) {
+		t.Fatalf("for me keeps the inbox: %v", got)
+	}
+	keys(m, "f", "f", "f") // alerts
+	if got := numbers(); !same(got, 3) {
+		t.Fatalf("alerts: %v", got)
+	}
+	keys(m, "f") // back to the default
+	if m.eventFilter != showFocus {
+		t.Fatal("f wraps to the default view")
+	}
+
+	keys(m, "/")
+	typeText(m, "question")
+	keys(m, "enter")
+	if got := numbers(); !same(got, 10) {
+		t.Fatalf("search should match titles: %v", got)
+	}
+	keys(m, "esc")
+	if len(m.shown) != 6 {
+		t.Fatalf("esc clears the search: %v", numbers())
+	}
+
+	keys(m, "S") // updated, still in sections
+	if got := numbers(); !same(got, 1, 2, 3, 10, 11, 12) {
+		t.Fatalf("by update within sections: %v", got)
+	}
+	keys(m, "S", "S") // severity
+	if got := numbers(); got[0] != 3 {
+		t.Fatalf("critical alert first: %v", got)
+	}
+}
+
+func TestInboxRecordsMentions(t *testing.T) {
+	m, gh := newTestModel(t)
+	m.login = "me"
+	m.st.InboxSince = time.Now()
+	direct, team := ev(1, config.KindIssue), ev(2, config.KindIssue)
+	gh.inbox = []github.InboxItem{
+		{Event: direct, Change: github.Change{Trigger: config.TriggerMentioned, ID: "m1"}},
+		{Event: team, Change: github.Change{Trigger: config.TriggerMentioned, ID: "m2"}, TeamMention: true},
+	}
+	run(m, m.pollInbox())
+	if m.st.Mentions[direct.Key] != state.MentionMe || m.st.Mentions[team.Key] != state.MentionTeam {
+		t.Fatalf("mentions: %v", m.st.Mentions)
+	}
+	gh.inbox = []github.InboxItem{{Event: direct, Change: github.Change{Trigger: config.TriggerMentioned, ID: "m3"}, TeamMention: true}}
+	run(m, m.pollInbox())
+	if m.st.Mentions[direct.Key] != state.MentionMe {
+		t.Fatal("a direct mention is never downgraded to a team one")
 	}
 }

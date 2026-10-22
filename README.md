@@ -43,7 +43,7 @@ go build -o fast-lane . && ./fast-lane
 
    Once any rule exists, only what the rules list auto-runs. See [Triggers](#triggers) for everything Fast Lane can react to, and the `auto_rules` [configuration](#configuration) for every filter and action.
 
-6. **Let your inbox come to you.** Review requests, @-mentions and assignments on any repo are picked up from your GitHub notifications and handled by default. Claude prepares the review or reply, then asks before posting it. `i` on the Rules tab switches this between running Claude, only listing them, and off. See [Inbox](#inbox).
+6. **Let your inbox come to you.** Review requests, @-mentions and assignments on any repo are picked up from your GitHub notifications and listed in the Events tab. Its default view has three sections, each in alphabetical order: watched repos, mentions of you, and mentions of a team you're in. Review requests and assignments from repos you don't watch are under `f` → *all* or *for me*. By default nothing runs on its own. Turn on auto-run with `i` on the Rules tab, and Claude prepares the review or reply, then asks before posting it. `i` cycles between listing only, off, auto-run and full auto. See [Inbox](#inbox).
 
 7. **Leave it running.** Fast Lane polls every two minutes and rings the terminal bell when something needs you. What it has seen and the session history are saved, so you can quit with `q` and pick up later. Sessions that were mid-turn when you quit are marked interrupted, and you can resume them with a reply.
 
@@ -55,10 +55,10 @@ The screen has five tabs. Switch between them with `1`–`5` or `tab`.
 
 | Tab | What it shows | Keys |
 | --- | --- | --- |
-| **Events** | Open PRs, issues, Dependabot alerts and code scanning alerts on watched repos. A `●` marks an item that's new or changed since you last acted on it, and a tag such as `[CI failed]` says what changed. | `enter` start Claude (you can edit the instructions first, then `ctrl+s`) · `s` jump to its session · `o` open in browser · `x` dismiss until it changes |
+| **Events** | Open PRs, issues, Dependabot alerts and code scanning alerts on watched repos. A `●` marks an item that's new or changed since you last acted on it, and a tag such as `[CI failed]` says what changed. | `enter` start Claude (you can edit the instructions first, then `ctrl+s`) · `s` jump to its session · `o` open in browser · `x` dismiss until it changes · `f` cycle filter: watched + mentions (the default), all, new, for me ([inbox](#inbox) items), PRs, issues, alerts · `S` cycle sort: a–z (repo, then title; the default), updated, created, severity · `/` search |
 | **Sessions** | Every Claude session and its live transcript, with status and cost. | `enter` reply to a finished session or answer a pending prompt · `x` stop · `D` delete a finished session and its worktree · `pgup`/`pgdn` scroll · `f` follow |
 | **Repos** | Your repos, starred repos and repos where you have open PRs. | `space` watch/unwatch · `a` cycle auto-run: off, on, [full auto](#full-auto) · `e` choose event kinds and local checkout · `r` edit its rules · `f` cycle filter · `/` search |
-| **Rules** | The [auto rules](#configuration) for the global scope or one watched repo, in the order they're tried, plus the inbox and the repo's auto-run setting. Changes are saved to the config file and apply from the next poll. | `[`/`]` switch scope · `n` new rule · `enter` edit · `d` delete · `J`/`K` reorder · `c` copy the global rules into this repo · `a` cycle the repo's auto-run (off, on, full auto) · `i` cycle the inbox (auto-run, full auto, list only, off) |
+| **Rules** | The [auto rules](#configuration) for the global scope or one watched repo, in the order they're tried, plus the inbox and the repo's auto-run setting. Changes are saved to the config file and apply from the next poll. | `[`/`]` switch scope · `n` new rule · `enter` edit · `d` delete · `J`/`K` reorder · `c` copy the global rules into this repo · `a` cycle the repo's auto-run (off, on, full auto) · `i` cycle the inbox (list only, off, auto-run, full auto) |
 | **Settings** | Prerequisite checks with fixes, then every top-level setting: polling, concurrency, the workspace, code folders, Claude Code's path, model, effort, permission mode, budget, allowed tools and extra arguments, the inbox, and the default prompt for each kind and trigger. An About section shows the version (also printed by `fast-lane -version`), whether a newer release is out, and links to the source and to [buy me a coffee](https://buymeacoffee.com/drlholloway). | `enter` edit or cycle the selected setting, or open a link · `c` run the checks and look for a new release again |
 
 `R` refreshes everything, `?` shows more help, and `q` quits.
@@ -96,7 +96,7 @@ When one poll finds several changes on an item, Fast Lane acts on the first one 
 
 Fast Lane also reads your GitHub notifications for review requests, @-mentions (including team mentions) and assignments, on any repository you can see, not just the ones you watch. Before acting on one, it checks that it still applies: the PR or issue is still open, your review is still requested, the comment really mentions you, you're still assigned. Items from repos you don't watch show up in the Events tab too, and sessions clone the repo on first use. The first inbox read after you upgrade only records the time, so older notifications never fire.
 
-These three triggers are aimed at you, so they follow `inbox.auto_run` rather than a repo's `auto_run`, and they auto-run even without a rule. By default Claude reviews the PR or drafts a reply or fix, then asks before submitting the review, posting, or pushing. To let it act on its own, add a rule with an `allow` list:
+These three triggers are aimed at you, so they follow `inbox.auto_run` rather than a repo's `auto_run`. It's off by default: the items are listed and marked new, and you start Claude on them by hand. With `"inbox": { "auto_run": true }` they auto-run even without a rule, and Claude reviews the PR or drafts a reply or fix, then asks before submitting the review, posting, or pushing. To let it act on its own, add a rule with an `allow` list:
 
 ```json
 "pull_request:review_requested": { "allow": ["review"] },
@@ -104,7 +104,7 @@ These three triggers are aimed at you, so they follow `inbox.auto_run` rather th
 "pull_request:mentioned": { "allow": ["comment"] }
 ```
 
-A rule for one of these keys can also filter, for example `skip_bots` or `skip_labels`. To list them without running Claude, set `"inbox": { "auto_run": false }`. To stop reading notifications altogether, set `"enabled": false`.
+A rule for one of these keys can also filter, for example `skip_bots` or `skip_labels`. With `auto_run` off, rules don't start anything for these triggers. To stop reading notifications altogether, set `"enabled": false`.
 
 ### Full auto
 
@@ -143,7 +143,7 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
   "code_dirs": ["~/Code", "~/src"],
   "max_concurrent": 2,
   "max_auto_runs": 5,
-  "inbox": { "enabled": true, "auto_run": true },
+  "inbox": { "enabled": true, "auto_run": false },
   "claude": {
     "path": "claude",
     "model": "claude-opus-5-5",
@@ -181,7 +181,7 @@ Settings live in `~/.config/fast-lane/config.json` (or `$XDG_CONFIG_HOME`) and a
 }
 ```
 
-- **`inbox`**: read review requests, mentions and assignments from your notifications (`enabled`), and run Claude on them without asking (`auto_run`). Both default to on. `full_auto` runs them in [full auto](#full-auto). See [Inbox](#inbox).
+- **`inbox`**: read review requests, mentions and assignments from your notifications (`enabled`), and run Claude on them without asking (`auto_run`). `enabled` defaults to on and `auto_run` to off. `full_auto` runs them in [full auto](#full-auto). See [Inbox](#inbox).
 - **`max_auto_runs`**: the most times auto-run will start or resume a session for one item. Sessions you start yourself don't count.
 - **`code_dirs`**: where to look for local checkouts (see [Local checkouts](#local-checkouts)). Set it to `[]` to always clone.
 - **`full_auto`** (per repo): run every trigger in [full auto](#full-auto). It implies `auto_run`.

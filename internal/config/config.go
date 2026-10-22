@@ -468,7 +468,7 @@ func Default() *Config {
 		WorkspaceDir:  filepath.Join(dataHome(), "fast-lane", "workspaces"),
 		MaxConcurrent: 2,
 		MaxAutoRuns:   5,
-		Inbox:         Inbox{Enabled: true, AutoRun: true},
+		Inbox:         Inbox{Enabled: true},
 		CodeDirs:      []string{"~/Code", "~/code", "~/src", "~/Projects", "~/Developer", "~/dev", "~/repos"},
 		Claude: Claude{
 			Path:           "claude",

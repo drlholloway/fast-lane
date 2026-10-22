@@ -35,6 +35,9 @@ type State struct {
 	// Inbox holds review requests, mentions and assignments from repos the
 	// user does not watch, by event key, so the feed keeps them across runs.
 	Inbox map[string]github.Event `json:"inbox"`
+	// Mentions records items that mention the user, by event key: MentionMe
+	// for the user, MentionTeam for only a team the user is in.
+	Mentions map[string]string `json:"mentions,omitempty"`
 	// InboxSince is when the inbox was last read; zero until the first poll,
 	// which only records the time so old notifications never fire.
 	InboxSince time.Time `json:"inbox_since"`
@@ -89,6 +92,25 @@ func (s *State) init() {
 	}
 	if s.Inbox == nil {
 		s.Inbox = map[string]github.Event{}
+	}
+	if s.Mentions == nil {
+		s.Mentions = map[string]string{}
+	}
+}
+
+// Kinds of mention recorded in Mentions.
+const (
+	MentionMe   = "me"
+	MentionTeam = "team"
+)
+
+// NoteMention records that key mentions the user, or only a team the user
+// is in. A direct mention is never downgraded to a team one.
+func (s *State) NoteMention(key string, team bool) {
+	if team && s.Mentions[key] == "" {
+		s.Mentions[key] = MentionTeam
+	} else if !team {
+		s.Mentions[key] = MentionMe
 	}
 }
 
@@ -146,6 +168,7 @@ func (s *State) PruneInbox(cutoff time.Time) {
 	for k, ev := range s.Inbox {
 		if ev.UpdatedAt.Before(cutoff) {
 			delete(s.Inbox, k)
+			delete(s.Mentions, k)
 		}
 	}
 }
@@ -166,6 +189,7 @@ func (s *State) Prune(open map[string]bool, maxAge time.Duration, now time.Time)
 			delete(s.Fired, k)
 			delete(s.LastChange, k)
 			delete(s.AutoRuns, k)
+			delete(s.Mentions, k)
 		}
 	}
 }

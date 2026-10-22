@@ -85,6 +85,7 @@ func TestSettingsCyclesAndLists(t *testing.T) {
 		t.Fatalf("enter should cycle the effort: %q", m.cfg.Claude.Effort)
 	}
 	m.setCursor = settingIndex(t, "Inbox")
+	m.cfg.Inbox.AutoRun = true
 	keys(m, "enter")
 	if m.dialog == nil || m.cfg.Inbox.FullAuto {
 		t.Fatal("enter on the inbox should ask before full auto")

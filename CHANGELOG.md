@@ -3,6 +3,23 @@
 All notable changes to Fast Lane. The section for a tagged version becomes the
 GitHub Release notes.
 
+## Unreleased
+
+### Added
+- Filter, search and sort the Events tab. The default view has three
+  sections, each sorted by repo, then title: watched repos, mentions of
+  you, and mentions of a team you're in. `f` also shows all, new, for me
+  (review requests, mentions and assignments), PRs, issues or alerts; `/`
+  searches repo, number, title, author, labels and branch; `S` sorts a–z or
+  by last update, creation or severity. The tab counts what's shown out of
+  the total.
+
+### Changed
+- The inbox no longer auto-runs by default: review requests, mentions and
+  assignments are listed for you to start by hand. Configs that already
+  have `"inbox": { "auto_run": true }` saved keep running them; press `i` on
+  the Rules tab, or set it to `false`, to switch.
+
 ## 0.2.1 — 2026-10-22
 
 ### Added

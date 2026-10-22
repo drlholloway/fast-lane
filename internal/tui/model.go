@@ -104,8 +104,13 @@ type Model struct {
 	filtering  bool
 
 	// Events tab.
-	events      map[string][]github.Event
-	feed        []github.Event
+	events map[string][]github.Event
+	feed   []github.Event
+	// shown is the feed after the filter, search and sort below.
+	shown       []github.Event
+	eventFilter eventFilter
+	eventSort   eventSort
+	eventQuery  textinput.Model
 	fresh       map[string]bool
 	eventCursor int
 	polling     int
@@ -149,25 +154,29 @@ func New(cfg *config.Config, st *state.State, gh github.Client, mgr *claude.Mana
 	fi := textinput.New()
 	fi.Placeholder = "filter repos"
 	fi.Prompt = "/ "
+	eq := textinput.New()
+	eq.Placeholder = "search events"
+	eq.Prompt = "/ "
 	return &Model{
-		cfg:      cfg,
-		st:       st,
-		gh:       gh,
-		mgr:      mgr,
-		Browse:   openURL,
-		Check:    doctor.Run,
-		Outdated: version.Outdated,
-		loading:  true,
-		spinner:  sp,
-		filter:   fi,
-		events:   map[string][]github.Event{},
-		fresh:    map[string]bool{},
-		pollErrs: map[string]string{},
-		deferred: map[string]bool{},
-		pending:  map[int]pendingRun{},
-		follow:   true,
-		started:  time.Now(),
-		sessions: mgr.Snapshot(),
+		cfg:        cfg,
+		st:         st,
+		gh:         gh,
+		mgr:        mgr,
+		Browse:     openURL,
+		Check:      doctor.Run,
+		Outdated:   version.Outdated,
+		loading:    true,
+		spinner:    sp,
+		filter:     fi,
+		eventQuery: eq,
+		events:     map[string][]github.Event{},
+		fresh:      map[string]bool{},
+		pollErrs:   map[string]string{},
+		deferred:   map[string]bool{},
+		pending:    map[int]pendingRun{},
+		follow:     true,
+		started:    time.Now(),
+		sessions:   mgr.Snapshot(),
 	}
 }
 
@@ -538,6 +547,9 @@ func (m *Model) onInbox(msg inboxMsg) tea.Cmd {
 		if rc == nil {
 			m.st.Inbox[ev.Key] = ev
 		}
+		if c.Trigger == config.TriggerMentioned {
+			m.st.NoteMention(ev.Key, it.TeamMention)
+		}
 		if !m.st.Fire(ev.Key, c) {
 			continue
 		}
@@ -718,7 +730,8 @@ func (m *Model) rebuildFeed() {
 	}
 	github.SortEvents(feed)
 	m.feed = feed
-	m.eventCursor = clamp(m.eventCursor, 0, len(feed)-1)
+	m.shown = m.visibleEvents()
+	m.eventCursor = clamp(m.eventCursor, 0, len(m.shown)-1)
 }
 
 func (m *Model) refreshSessions() {
@@ -918,7 +931,11 @@ func (m *Model) tabsView() string {
 		label := fmt.Sprintf("%d %s", i+1, name)
 		switch tab(i) {
 		case tabEvents:
-			label += fmt.Sprintf(" (%d)", len(m.feed))
+			if len(m.shown) != len(m.feed) {
+				label += fmt.Sprintf(" (%d/%d)", len(m.shown), len(m.feed))
+			} else {
+				label += fmt.Sprintf(" (%d)", len(m.feed))
+			}
 		case tabSessions:
 			label += fmt.Sprintf(" (%d)", len(m.sessions))
 		}
@@ -939,7 +956,7 @@ func (m *Model) footerView() string {
 	case m.filtering:
 		help = helpLine("enter", "apply", "esc", "clear")
 	case m.tab == tabEvents:
-		help = helpLine("enter", "run Claude", "s", "session", "o", "open", "x", "dismiss", "R", "refresh", "?", "help", "q", "quit")
+		help = helpLine("enter", "run Claude", "s", "session", "o", "open", "x", "dismiss", "f", "filter", "S", "sort", "/", "search", "?", "help", "q", "quit")
 	case m.tab == tabSessions:
 		help = helpLine("enter", "reply/answer", "x", "stop", "D", "delete", "o", "open", "pgup/pgdn", "scroll", "?", "help", "q", "quit")
 	case m.tab == tabRepos:
