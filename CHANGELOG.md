@@ -15,11 +15,13 @@ GitHub Release notes.
   the total.
 
 ### Changed
+- **License:** now free software under the GNU Affero General Public
+  License, version 3 only (AGPL-3.0-only). Earlier releases remain under
+  the PolyForm Shield License 1.0.0.
 - The inbox no longer auto-runs by default: review requests, mentions and
   assignments are listed for you to start by hand. Configs that already
   have `"inbox": { "auto_run": true }` saved keep running them; press `i` on
   the Rules tab, or set it to `false`, to switch.
-
 ## 0.2.1 — 2026-10-22
 
 ### Added

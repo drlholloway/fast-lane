@@ -72,7 +72,8 @@ American spelling in user-facing text and docs ("color", "behavior").
 
 ## Licensing of contributions
 
-Fast Lane is licensed under the [PolyForm Shield License 1.0.0](LICENSE.md).
+Fast Lane is licensed under the [GNU Affero General Public License, version 3
+only](LICENSE.md).
 By submitting a contribution you agree that it is licensed under the same
 terms. Please do not submit code copied from projects under incompatible
 licenses.

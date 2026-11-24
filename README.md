@@ -246,6 +246,6 @@ Bug reports, recipes and fixes are welcome; see [CONTRIBUTING.md](CONTRIBUTING.m
 
 ## License
 
-Fast Lane is licensed under the [PolyForm Shield License 1.0.0](LICENSE.md). You're free to use, modify and share it, including at work. What you can't do is use it to offer a product that competes with Fast Lane, such as selling it or a derivative of it as a product or service.
+Fast Lane is free software under the [GNU Affero General Public License, version 3 only](LICENSE.md) (AGPL-3.0-only); the copyright notice is in [NOTICE](NOTICE). You're free to use, modify and share it, including at work. If you distribute a changed version, or run one as a service for others, you must publish your changes under the same license.
 
-Because of that restriction, this is a *source-available* license rather than an OSI-approved open source license.
+Releases before 24 November 2026 were under the PolyForm Shield License 1.0.0.
