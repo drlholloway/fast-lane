@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -45,6 +45,8 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload its files
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -70,7 +72,7 @@ jobs:
 
           You also need the [GitHub CLI](https://cli.github.com), logged in, and [Claude Code](https://claude.com/claude-code). Run `fast-lane -version` to confirm which build you have. Help and how-tos are on the [wiki](https://github.com/drlholloway/fast-lane/wiki). Full history: [CHANGELOG.md](https://github.com/drlholloway/fast-lane/blob/main/CHANGELOG.md)
           NOTES
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           name: Fast Lane ${{ github.ref_name }}
           body_path: notes.md
